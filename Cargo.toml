@@ -8,6 +8,7 @@ readme = "README.md"
 repository = "https://github.com/Felix1G/soklyn"
 license = "MIT"
 keywords = ["cuda", "nn", "deep-learning", "gpu", "machine-learning"]
+documentation = "https://docs.rs/crate/soklyn/0.1.0"
 categories = [
     "artificial-intelligence",
     "hardware-support",
