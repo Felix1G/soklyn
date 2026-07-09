@@ -6,3 +6,4 @@ assets/.idea
 assets/cmake-build-debug
 src/cuda/.idea
 src/cuda/cmake-build-debug
+.idea
