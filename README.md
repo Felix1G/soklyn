@@ -7,6 +7,7 @@
 [![Language](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Backend](https://img.shields.io/badge/backend-CUDA-green.svg)](https://developer.nvidia.com/cuda-toolkit)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[<img alt="crates.io" src="https://img.shields.io/crates/v/soklyn.svg?style=for-the-badge&color=fc8d62&logo=rust" height="20">](https://crates.io/crates/soklyn)
 
 [Features](#features) • [Quick Start](#quick-start) • [Architecture](#architecture) • [Usage](#usage)
 

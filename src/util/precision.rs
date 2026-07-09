@@ -81,6 +81,7 @@ impl<T: PrecisionType, U: PrecisionType> CastPrecision<Tensor<U>> for Tensor<T> 
     fn cast(self, context: &GpuContext) -> Result<Tensor<U>, Error> {
         let tensor = Tensor::<U>::zeros(context, &[self.rows(), self.cols()]);
         context.gpu_cast_t(self.get_data(), tensor.get_data())?;
+        self.drop(context)?;
         Ok(tensor)
     }
 }

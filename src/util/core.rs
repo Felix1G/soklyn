@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use cudarc::driver::{CudaSlice, CudaStream, DeviceRepr};
 use crate::io::device::GpuContext;
+use crate::util::log::Error;
 use crate::util::precision::PrecisionType;
 
 static TENSOR_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -138,7 +139,7 @@ impl<T: PrecisionType> Matrix<T> {
     pub fn is_not_empty(&self) -> bool { self.v.len() != 0 }
 }
 
-/// Multidimensional da a container which generalises scalars, vectors, and matrices to
+/// Multidimensional data container which generalises scalars, vectors, and matrices to
 /// any number of dimensions—that serves as the fundamental memory and
 /// mathematical tracking unit of a neural network.
 /// 
@@ -245,6 +246,16 @@ impl<T: PrecisionType + DeviceRepr> Tensor<T> {
 
     pub fn get_data(&self) -> &CudaSlice<T> {
         &self.data
+    }
+
+    /// Safely remove this tensor from memory.
+    ///
+    /// # Arguments
+    /// * `context` - See [`GpuContext`].
+    pub fn drop(self, context: &GpuContext) -> Result<(), Error> {
+        drop(self);
+        context.get_stream().synchronize()?;
+        Ok(())
     }
 
     /// Fetches `data` from the live GPU memory buffers.

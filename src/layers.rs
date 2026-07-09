@@ -490,6 +490,10 @@ impl<T: PrecisionType> DenseBlock<T> {
         self.mask.broadcast(context, T::from_f32(1.0));
     }
 
+    /// Safely remove this block from memory.
+    ///
+    /// # Arguments
+    /// * `context` - See [`GpuContext`].
     pub fn drop(self, context: &GpuContext) -> Result<(), Error> {
         drop(self);
         context.get_stream().synchronize()?;
