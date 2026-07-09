@@ -1,6 +1,7 @@
 use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::{RngCore, SeedableRng};
-use crate::nn::functions::Optimiser::{Adam, SGD};
+use crate::util::functions::Optimiser::{Adam, SGD};
+use crate::util::precision::PrecisionType;
 
 /// Regularisation is applied right before the optimiser.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -81,7 +82,7 @@ pub enum Optimiser {
     /// * `nesterov` - If set to true, uses Nesterov Accelerated Gradient.
     SGD(f32, bool),
 
-    /// Adaptive optimization algorithm that speeds up training by calculating
+    /// Adaptive optimisation algorithm that speeds up training by calculating
     /// unique learning rates for individual parameters based on a running combination of
     /// their average gradient direction (momentum) and their gradient variance (scaling factor).
     ///
@@ -93,21 +94,6 @@ pub enum Optimiser {
 }
 
 impl Optimiser {
-    /// Flags: (use_momentum, use_squared_grads)
-    pub(crate) fn flags(&self) -> (bool, bool) {
-        let use_momentum = match self {
-            SGD(momentum_coeff, _) => *momentum_coeff != 0.0,
-            Adam(_, _, _) => true
-        };
-
-        let use_squared_grads = match self {
-            SGD(_, _) => false,
-            Adam(_, _, _) => true
-        };
-
-        (use_momentum, use_squared_grads)
-    }
-
     pub(crate) fn ordinal(&self) -> usize {
         match self {
             SGD(_, _) => 0,
@@ -165,7 +151,7 @@ impl Activation {
 
 /// Supported error calculation functions.
 #[derive(Debug, Clone, Copy)]
-pub enum ErrorFunc {
+pub enum LossFunc {
     /// Cannot be paired with softmax. (`1/2N * (target - output)^2`)
     MeanSquareLoss,
     /// Can only be paired with softmax.
@@ -187,8 +173,8 @@ pub enum ErrorFunc {
 /// * [`InitHeNormalFunc`] - Initialises weights from a zero-mean normal distribution scaled strictly by the input dimensions to preserve signal variance when using ReLU activations.
 /// * [`InitZeroFunc`] - Initialises to `0.0`.
 pub trait InitFunc {
-    fn new(seed: u64, mul: f32) -> Self;
-    fn init(&mut self, fan_in: usize, fan_out: usize) -> Vec<f32>;
+    fn new<T: PrecisionType>(seed: u64, mul: f32) -> Self;
+    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T>;
 }
 
 pub struct InitXavierUniformFunc {
@@ -214,96 +200,92 @@ pub struct InitHeNormalFunc {
 /// Initialises to `0.0`.
 pub struct InitZeroFunc {}
 
+fn normal_dist<T: PrecisionType>(total: usize, rng: &mut ChaCha8Rng, factor: f32, std: f32) -> Vec<T> {
+    (0..total)
+        .map(|_| {
+            let u1 = (rng.next_u32() as f32 + 1.0) / (u32::MAX as f32 + 1.0);
+            let u2 = rng.next_u32() as f32 / u32::MAX as f32;
+            let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos();
+            T::from_f32(factor * z * std)
+        })
+        .collect()
+}
+
+fn uniform_dist<T: PrecisionType>(total: usize, rng: &mut ChaCha8Rng, factor: f32, limit: f32) -> Vec<T> {
+    (0..total)
+        .map(|_| {
+            let raw = rng.next_u32() as f32 / u32::MAX as f32;
+            T::from_f32(factor * (-limit + raw * (2.0 * limit)))
+        })
+        .collect()
+}
+
 impl InitFunc for InitXavierUniformFunc {
-    fn new(seed: u64, factor: f32) -> Self {
+    fn new<T: PrecisionType>(seed: u64, factor: f32) -> Self {
         Self {
             rng: ChaCha8Rng::seed_from_u64(seed),
             factor
         }
     }
 
-    fn init(&mut self, fan_in: usize, fan_out: usize) -> Vec<f32> {
+    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T> {
         let total = fan_in * fan_out;
         let limit = (6.0 / (fan_in + fan_out) as f32).sqrt();
-        (0..total)
-            .map(|_| {
-                let raw = self.rng.next_u32() as f32 / u32::MAX as f32;
-                self.factor * (-limit + raw * (2.0 * limit))
-            })
-            .collect()
+        uniform_dist(total, &mut self.rng, self.factor, limit)
     }
 }
 
 impl InitFunc for InitXavierNormalFunc {
-    fn new(seed: u64, factor: f32) -> Self {
+    fn new<T: PrecisionType>(seed: u64, factor: f32) -> Self {
         Self {
             rng: ChaCha8Rng::seed_from_u64(seed),
             factor
         }
     }
 
-    fn init(&mut self, fan_in: usize, fan_out: usize) -> Vec<f32> {
+    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T> {
         let total = fan_in * fan_out;
         let std = (2.0 / (fan_in + fan_out) as f32).sqrt();
-        (0..total)
-            .map(|_| {
-                let u1 = (self.rng.next_u32() as f32 + 1.0) / (u32::MAX as f32 + 1.0);
-                let u2 = self.rng.next_u32() as f32 / u32::MAX as f32;
-                let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos();
-                self.factor * z * std
-            })
-            .collect()
+        normal_dist(total, &mut self.rng, self.factor, std)
     }
 }
 impl InitFunc for InitHeUniformFunc {
-    fn new(seed: u64, factor: f32) -> Self {
+    fn new<T: PrecisionType>(seed: u64, factor: f32) -> Self {
         Self {
             rng: ChaCha8Rng::seed_from_u64(seed),
             factor
         }
     }
 
-    fn init(&mut self, fan_in: usize, fan_out: usize) -> Vec<f32> {
+    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T> {
         let total = fan_in * fan_out;
         let limit = (6.0 / fan_in as f32).sqrt();
-        (0..total)
-            .map(|_| {
-                let raw = self.rng.next_u32() as f32 / u32::MAX as f32;
-                self.factor * (-limit + raw * (2.0 * limit))
-            })
-            .collect()
+        uniform_dist(total, &mut self.rng, self.factor, limit)
     }
 }
 
 impl InitFunc for InitHeNormalFunc {
-    fn new(seed: u64, factor: f32) -> Self {
+    fn new<T: PrecisionType>(seed: u64, factor: f32) -> Self {
         Self {
             rng: ChaCha8Rng::seed_from_u64(seed),
             factor
         }
     }
 
-    fn init(&mut self, fan_in: usize, fan_out: usize) -> Vec<f32> {
+    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T> {
         let total = fan_in * fan_out;
         let std = (2.0 / fan_in as f32).sqrt();
-        (0..total)
-            .map(|_| {
-                let u1 = (self.rng.next_u32() as f32 + 1.0) / (u32::MAX as f32 + 1.0);
-                let u2 = self.rng.next_u32() as f32 / u32::MAX as f32;
-                let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos();
-                self.factor * z * std
-            })
-            .collect()
+        normal_dist(total, &mut self.rng, self.factor, std)
     }
 }
 
 impl InitFunc for InitZeroFunc {
     /// `_seed` is Redundant. You may leave it as any number.
-    fn new(_seed: u64, _factor: f32) -> Self {
+    fn new<T: PrecisionType>(_seed: u64, _factor: f32) -> Self {
         Self {}
     }
 
-    fn init(&mut self, fan_in: usize, fan_out: usize) -> Vec<f32> {
-        vec![0.0; fan_in * fan_out]
+    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T> {
+        vec![T::zero(); fan_in * fan_out]
     }
 }

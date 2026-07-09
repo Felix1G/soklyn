@@ -2,8 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    // Tell Cargo to re-run this script if our CUDA source code changes
-    println!("cargo:rerun-if-changed=assets/nn_math.cu");
+    println!("cargo:rerun-if-changed=src/cuda/*");
 
     // Set up our build output paths inside Cargo's isolated OUT_DIR
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -31,11 +30,12 @@ fn main() {
 
     // Invoke the cc crate to compile the CUDA file using NVCC
     let status = Command::new("nvcc")
+        .arg("-std=c++17")
         .arg("-ptx")                           // Force clean text assembly generation
         .args(&arch)                      // Pass the split gencode array safely
         .arg("-ccbin")
         .arg(&cl_path)                      // Dynamically found path to cl.exe
-        .arg("assets/nn_math.cu")             // Source input file path
+        .arg("src/cuda/nn_math.cu")             // Source input file path
         .arg("-o")
         .arg(&output_ptx_path)                 // Target destination inside OUT_DIR
         .status()

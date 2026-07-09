@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use cudarc::driver::{CudaSlice, CudaStream};
-use crate::device::GpuContext;
+use cudarc::driver::{CudaSlice, CudaStream, DeviceRepr};
+use crate::io::device::GpuContext;
+use crate::util::precision::PrecisionType;
 
 static TENSOR_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -9,6 +10,7 @@ fn generate_unique_tensor_id() -> usize {
     TENSOR_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
+#[allow(unused)]
 pub(crate) fn check_all_equal<T: PartialEq>(vec: &Vec<T>) -> bool {
     let t = &vec[0];
     for x in vec.iter().skip(1) {
@@ -25,26 +27,26 @@ pub(crate) fn scramble_seed(step: u32, layer_id: u32) -> u32 {
     hash ^ (hash >> 15)
 }
 
-/// Downloads the data from the VRAM into the CPU.
+/// Downloads the data from the live GPU memory buffers into the CPU.
 /// 
 /// # Arguments
 /// * `stream` - CUDA stream, can be obtained from [`GpuContext`].
-/// * `c` - Slice of allocated VRAM memory to download.
-pub fn download_cuda_slice(stream: &Arc<CudaStream>, c: &CudaSlice<f32>) -> Vec<f32> {
+/// * `c` - Slice of allocated live GPU memory buffers to download.
+pub fn download_cuda_slice<T: PrecisionType>(stream: &Arc<CudaStream>, c: &CudaSlice<T>) -> Vec<T> {
     stream.clone_dtoh(c).unwrap()
 }
 
 /// A typical matrix of size `(rows, cols)`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[allow(dead_code)]
-pub struct Matrix {
+pub struct Matrix<T: PrecisionType> {
     pub rows: usize,
     pub cols: usize,
-    pub v: Vec<f32> //values
+    pub v: Vec<T> //values
 }
 
 #[allow(dead_code)]
-impl Matrix {
+impl<T: PrecisionType> Matrix<T> {
     /// Creates a new empty [`Matrix`]. In other words, size is (0, 0).
     pub fn empty() -> Self { Self::new(0, 0) }
 
@@ -58,7 +60,7 @@ impl Matrix {
         Self {
             rows,
             cols,
-            v: vec![0.0; rows * cols]
+            v: vec![T::zero(); rows * cols]
         }
     }
 
@@ -72,7 +74,7 @@ impl Matrix {
     /// * `init` - Initialisation function `which must return a `f32`.
     pub fn new_init<F>(rows: usize, cols: usize, mut init: F) -> Self
     where
-        F: FnMut(usize, usize) -> f32,
+        F: FnMut(usize, usize) -> T,
     {
         let mut v = Vec::with_capacity(rows * cols);
 
@@ -91,7 +93,7 @@ impl Matrix {
     ///
     /// # Returns
     /// The reference of the element.
-    pub fn get(&self, row: usize, col: usize) -> Option<&f32> {
+    pub fn get(&self, row: usize, col: usize) -> Option<&T> {
         if row < self.rows && col < self.cols {
             self.v.get(row * self.cols + col)
         } else {
@@ -105,7 +107,7 @@ impl Matrix {
     ///
     /// # Returns
     /// The mutable reference of the element.
-    pub fn get_mut(&mut self, row: usize, col: usize) -> Option<&mut f32> {
+    pub fn get_mut(&mut self, row: usize, col: usize) -> Option<&mut T> {
         if row < self.rows && col < self.cols {
             self.v.get_mut(row * self.cols + col)
         } else {
@@ -117,7 +119,7 @@ impl Matrix {
     /// # Arguments
     /// * `row` - The row of the element.
     /// * `col` - The column of the element.
-    pub fn set(&mut self, row: usize, col: usize, val: f32) {
+    pub fn set(&mut self, row: usize, col: usize, val: T) {
         assert!(row < self.rows && col < self.cols, "Index out of bounds");
         self.v[row * self.cols + col] = val;
     }
@@ -125,7 +127,7 @@ impl Matrix {
     /// See [`Self::set`].
     /// # Arguments
     /// * `idx` - The index of the value array.
-    pub fn set_v(&mut self, idx: usize, val: f32) {
+    pub fn set_v(&mut self, idx: usize, val: T) {
         self.v[idx] = val;
     }
 
@@ -136,19 +138,19 @@ impl Matrix {
     pub fn is_not_empty(&self) -> bool { self.v.len() != 0 }
 }
 
-/// Multi-dimensional data container which generalises scalars, vectors, and matrices to
+/// Multidimensional da a container which generalises scalars, vectors, and matrices to
 /// any number of dimensions—that serves as the fundamental memory and
 /// mathematical tracking unit of a neural network.
 /// 
-/// Stores some variables in VRAM as `CudaSlice<f32>`. Data is generally row-major.
+/// Stores some variables in the live GPU memory buffers as `CudaSlice<f32>`. Data is generally row-major.
 #[derive(Debug)]
-pub struct Tensor {
+pub struct Tensor<T: PrecisionType> {
     id: usize,
-    shape: Vec<usize>,
-    data: CudaSlice<f32>,
+    shape: [usize; 2],
+    data: CudaSlice<T>,
 }
 
-impl Tensor {
+impl<T: PrecisionType + DeviceRepr> Tensor<T> {
     /// Creates a new tensor from CPU data vector.
     ///
     /// # Arguments
@@ -159,7 +161,7 @@ impl Tensor {
     /// # Panics
     /// Panics if the length of `shape` is not 2, which represents rows and column respectively.
     /// Panics if length of `cpu_data` does not match total elements of the matrix of size `shape`.
-    pub fn from_cpu_vector(context: &GpuContext, cpu_data: &Vec<f32>, shape: &Vec<usize>) -> Self {
+    pub fn from_cpu_vector(context: &GpuContext, cpu_data: &[T], shape: &[usize; 2]) -> Self {
         assert_eq!(shape.len(), 2, "Shape must be length of 2 representing rows and columns respectively.");
 
         let size = shape[0] * shape[1];
@@ -175,6 +177,18 @@ impl Tensor {
         }
     }
 
+    #[allow(unused)]
+    pub(crate) fn from_gpu_slice(gpu_slice: CudaSlice<T>, shape: &[usize; 2]) -> Self {
+        assert_eq!(shape.len(), 2, "Shape must be length of 2 representing rows and columns respectively.");
+        assert_eq!(shape.len(), gpu_slice.len(), "Shape and CUDA slice length mismatch.");
+
+        Self {
+            id: generate_unique_tensor_id(),
+            shape: shape.clone(),
+            data: gpu_slice
+        }
+    }
+
     /// Creates a new tensor with all the same values.
     ///
     /// # Arguments
@@ -184,7 +198,7 @@ impl Tensor {
     ///
     /// # Panics
     /// Panics if the length of `shape` is not 2, which represents rows and column respectively.
-    pub fn fill(context: &GpuContext, shape: &Vec<usize>, value: f32) -> Self {
+    pub fn fill(context: &GpuContext, shape: &[usize; 2], value: T) -> Self {
         assert_eq!(shape.len(), 2, "Shape must be length of 2 representing rows and columns respectively.");
 
         let mut tensor = Self::zeros(context, shape);
@@ -200,11 +214,11 @@ impl Tensor {
     ///
     /// # Panics
     /// Panics if the length of `shape` is not 2, which represents rows and column respectively.
-    pub fn zeros(context: &GpuContext, shape: &Vec<usize>) -> Self {
+    pub fn zeros(context: &GpuContext, shape: &[usize; 2]) -> Self {
         assert_eq!(shape.len(), 2, "Shape must be length of 2 representing rows and columns respectively.");
 
         let size = shape[0] * shape[1];
-        let data_gpu = context.get_stream().alloc_zeros::<f32>(size).expect("Cannot allocate memory in VRAM for this tensor.");
+        let data_gpu = context.get_stream().alloc_zeros::<T>(size).expect("Cannot allocate memory in VRAM for this tensor.");
         context.get_stream().synchronize().unwrap();
 
         Self {
@@ -229,26 +243,38 @@ impl Tensor {
         self.id 
     }
 
-    pub fn get_data(&self) -> &CudaSlice<f32> {
+    pub fn get_data(&self) -> &CudaSlice<T> {
         &self.data
     }
 
-    /// Fetches `data` from the VRAM.
+    /// Fetches `data` from the live GPU memory buffers.
     ///
     /// # Arguments
     /// * `context` - See [`GpuContext`]
-    pub fn download(&self, context: &GpuContext) -> Matrix {
+    pub fn download(&self, context: &GpuContext) -> Matrix<T> {
         let mut mat = Matrix::new(self.rows(), self.cols());
         mat.v = download_cuda_slice(context.get_stream(), &self.data);
         mat
     }
 
-    /// Sets all the elements of this tensor to a value in the VRAM.
+    /// Sets all the elements of this tensor to a value in the live GPU memory buffers.
     ///
     /// # Arguments
     /// * `context` - See [`GpuContext`]
     /// * `value` - The value to set.
-    pub fn broadcast(&mut self, context: &GpuContext, value: f32) {
-        context.gpu_memset(&self.data, value);
+    pub fn broadcast(&mut self, context: &GpuContext, value: T) {
+        context.gpu_broadcast(&self.data, value);
+    }
+
+    /// Copies this tensor by copying the data from the live GPU memory buffers.
+    ///
+    /// # Arguments
+    /// * `context` - See [`GpuContext`]
+    pub fn clone(&self, context: &GpuContext) -> Tensor<T> {
+        Tensor::<T> {
+            id: generate_unique_tensor_id(),
+            shape: self.shape.clone(),
+            data: context.get_stream().clone_dtod(self.get_data()).expect("Tensor clone failed.")
+        }
     }
 }

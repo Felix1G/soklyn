@@ -1,17 +1,20 @@
 [package]
-name = "intelligent_artificial"
+name = "soklyn"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 rand = "0.10.0"
-rand_distr = "0.5.0"
 rand_chacha = "0.9.0"
-cudarc = { version = "0.19.7", features = ["cuda-12050", "nvrtc"] }
+cudarc = { version = "0.19.7", features = ["cuda-12050", "nvrtc", "f16"] }
 derivative = "2.2.0"
 bytemuck = "1.25.0"
 serde_json = "1.0.150"
 serde = { version = "1.0.228", features = ["derive"] }
+half = { version = "2.7.1", features = ["bytemuck", "serde", "num-traits"] }
+thiserror = "2.0.18"
+env_logger = "0.11.11"
+log = "0.4.32"
 
 [dev-dependencies]
 mnist = { version = "0.6.0", features = ["download"] }

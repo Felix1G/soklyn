@@ -1,4 +1,8 @@
 /target
 network.safetensors
 network1.safetensors
-/data
+assets/data
+assets/.idea
+assets/cmake-build-debug
+src/cuda/.idea
+src/cuda/cmake-build-debug
