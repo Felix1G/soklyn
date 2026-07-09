@@ -84,14 +84,18 @@ fn run_pipeline() -> Result<(), Error> {
         DenseBlock::default(&context, true, 128, 2, BATCH_SIZE, &mut rand)
     ];
 
-    /*let mut layers = vec![];
+    for layer in layers {
+        layer.drop(&context)?;
+    }
+
+    let mut layers = vec![];
     let loaded_blocks = load_dense_blocks::<&str, f16>(
-        &context, "assets/data/cifar52.14.safetensors", true, BATCH_SIZE
+        &context, "assets/data/cifar58.78.safetensors", true, BATCH_SIZE
     )?;
 
     for layer in loaded_blocks {
         layers.push(layer);
-    }*/
+    }
     configure_layers(&mut layers);
 
     let steps_per_epoch = TRAIN_ELEMENTS as usize / BATCH_SIZE;

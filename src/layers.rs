@@ -490,6 +490,12 @@ impl<T: PrecisionType> DenseBlock<T> {
         self.mask.broadcast(context, T::from_f32(1.0));
     }
 
+    pub fn drop(self, context: &GpuContext) -> Result<(), Error> {
+        drop(self);
+        context.get_stream().synchronize()?;
+        Ok(())
+    }
+
     /// Forward propagation. The matrices are row-major i.e. batch size is determined from the
     /// number of rows of `input`.
     ///
