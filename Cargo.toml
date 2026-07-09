@@ -2,6 +2,19 @@
 name = "soklyn"
 version = "0.1.0"
 edition = "2024"
+authors = ["Felix1G"]
+description = "A high-performance neural network library written in Rust, utilizing CUDA for GPU-accelerated layer execution."
+readme = "README.md"
+repository = "https://github.com/Felix1G/soklyn/tree/master"
+license = "MIT"
+keywords = ["cuda", "nn", "deep-learning", "gpu", "machine-learning"]
+categories = [
+    "science::machine-learning",
+    "hardware-support",
+    "data-structures",
+    "asynchronous"
+]
+build = "build.rs"
 
 [dependencies]
 rand = "0.10.0"
