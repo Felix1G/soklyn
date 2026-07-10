@@ -2,7 +2,7 @@
 
 # ⚡ Soklyn (速練)
 
-**A high-performance neural network library written in Rust, utilizing CUDA for GPU-accelerated layer execution.**
+**A high-performance neural network library written in Rust, utilising CUDA for GPU-accelerated layer execution.**
 
 [![Language](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Backend](https://img.shields.io/badge/backend-CUDA-green.svg)](https://developer.nvidia.com/cuda-toolkit)
