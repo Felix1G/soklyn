@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::process::exit;
 use std::time::SystemTime;
+use soklyn::io::save::SafetensorFile;
 
 const BATCH_SIZE: usize = 200;
 const CLAMP: f32 = f32::MAX;
@@ -112,11 +113,9 @@ fn epoch(
     println!("--- Epoch #{epoch} complete ---");
 
     if epoch % 10 == 0 {
-        network.save_with_metadata(
-            context,
-            format!("assets/data/mnist{}AEC.safetensors", epoch / 10),
-            &[("epoch", epoch.to_string())],
-        )?;
+        let mut writer = SafetensorFile::from_ffn(&context, &network)?;
+        writer.pass_metadata(&"epoch", &epoch);
+        writer.save(format!("assets/data/mnist{}AEC.safetensors", epoch / 10))?;
     }
     Ok(())
 }

@@ -1,5 +1,6 @@
 use std::io;
 use cudarc::driver::DriverError;
+use tempfile::PersistError;
 use thiserror::Error;
 use crate::util::precision::Precision;
 
@@ -20,6 +21,9 @@ pub enum Error {
 
     #[error("Driver error: {0}")]
     DriverError(#[from] DriverError),
+
+    #[error("Temp file writing error: {0}")]
+    PersistError(#[from] PersistError),
 
     #[error("Hardware acceleration constraint violation: Precision is {precision:?}, which requires a tile dimension of {expected}, but found {found}. (WMMA requirement)")]
     HardwareConstraintViolation {

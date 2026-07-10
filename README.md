@@ -23,7 +23,7 @@ without PyTorch, without TensorFlow, without any abstraction layer between the p
 The answer turned out to be: custom CUDA kernels, a lot of debugging, and more debugging until it finally works.
 Soklyn is not trying to replace existing frameworks. It exists because building it was worth doing.
 
-You can say that this is like a 'rewrite' to my previous project [fksainetwork](https://github.com/Felix1G/fksainetwork) :)
+You can say that this is a HUGE improvement to my previous project [fksainetwork](https://github.com/Felix1G/fksainetwork) :)
 
 ## Features
 *This framework currently only supports feed forward networks. Convolutional neural networks and more are coming soon!*

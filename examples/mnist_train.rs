@@ -3,7 +3,7 @@ use rand::prelude::SliceRandom;
 use rand::rng;
 use soklyn::ffn::FeedForwardNetwork;
 use soklyn::io::device::GpuContext;
-use soklyn::layers::{load_dense_blocks, DenseBlock};
+use soklyn::layers::DenseBlock;
 use soklyn::util::core::Tensor;
 use soklyn::util::functions::Activation::{Identity, LeakyReLU, Mish};
 use soklyn::util::functions::Normalisation::{BatchNorm, Disabled, LayerNorm};
@@ -14,6 +14,7 @@ use soklyn::util::log::{init_log, Error};
 use soklyn::util::scheduler::{ReduceLROnPlateauScheduler, SchedulerMode};
 use std::process::exit;
 use std::time::SystemTime;
+use soklyn::io::save::SafetensorFile;
 
 const BATCH_SIZE: usize = 200;
 const REGU_CONST: f32 = 0.0001;
@@ -82,8 +83,9 @@ fn run_pipeline() -> Result<(), Error> {
         DenseBlock::default(&context, true, 2048, 2048, BATCH_SIZE, &mut rand),
         DenseBlock::default(&context, true, 2048, 10, BATCH_SIZE, &mut rand)
     ];
-
-    let mut layers = load_dense_blocks(&context, "assets/data/mnist7AEC.safetensors", true, BATCH_SIZE)?;
+    
+    let writer = SafetensorFile::read("assets/data/mnist7AEC.safetensors")?;
+    let mut layers = writer.into_blocks(&context, true, BATCH_SIZE)?;
     while layers.len() > 2 {
         layers.pop();
     }
@@ -147,11 +149,9 @@ fn epoch(
     println!("--- Epoch #{epoch} complete ---");
 
     if epoch % 10 == 0 {
-        network.save_with_metadata(
-            context,
-            format!("assets/data/mnist{}.safetensors", epoch / 10),
-            &[("a", "b")],
-        )?;
+        let mut writer = SafetensorFile::from_ffn(&context, &network)?;
+        writer.pass_metadata(&"epoch", &epoch);
+        writer.save(format!("assets/data/mnist{}.safetensors", epoch / 10))?;
     }
     Ok(())
 }

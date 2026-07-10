@@ -5,6 +5,58 @@ use crate::io::device::GpuContext;
 use crate::util::log::Error;
 use crate::util::precision::PrecisionType;
 
+#[macro_export]
+macro_rules! getter {
+    ($name:ident, $field:ident . $method:ident(), $t:ty) => {
+        pub fn $name(&self) -> &$t {
+            &self.$field.$method()
+        }
+    };
+
+    ($name:ident, $($field:ident).+, $t:ty) => {
+        pub fn $name(&self) -> &$t {
+            &self.$($field).+
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! getter_unwrap {
+    ($name:ident, $field:ident . $method:ident(), $t:ty) => {
+        pub fn $name(&self) -> &$t {
+            &self.$field.$method().+.as_ref().unwrap()
+        }
+    };
+
+    ($name:ident, $($field:ident).+, $t:ty) => {
+        pub fn $name(&self) -> &$t {
+            &self.$($field).+.as_ref().unwrap()
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! getter_copy {
+    ($name:ident, $field:ident . $method:ident(), $t:ty) => {
+        pub fn $name(&self) -> $t {
+            self.$field.$method()
+        }
+    };
+
+    ($name:ident, $($field:ident).+, $t:ty) => {
+        pub fn $name(&self) -> $t {
+            self.$($field).+
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! setter {
+    ($name:ident, $($field:tt).+, $t:ty) => {
+        pub fn $name(&mut self, val: $t) { self.$($field).+ = val; }
+    };
+}
+
 static TENSOR_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn generate_unique_tensor_id() -> usize {

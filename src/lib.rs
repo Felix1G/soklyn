@@ -1,5 +1,6 @@
 pub mod io {
     pub mod device;
+    pub mod save;
     pub(crate) mod safetensor;
 }
 

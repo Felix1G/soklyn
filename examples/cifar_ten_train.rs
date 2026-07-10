@@ -2,7 +2,7 @@ use cifar_ten::*;
 use half::f16;
 use soklyn::io::device::GpuContext;
 #[allow(unused_imports)]
-use soklyn::layers::{load_dense_blocks, save_dense_blocks_with_metadata, DenseBlock};
+use soklyn::layers::DenseBlock;
 use soklyn::util::core::Tensor;
 use soklyn::util::functions::Activation::{Identity, Mish};
 use soklyn::util::functions::Normalisation::{BatchNorm, Disabled};
@@ -17,6 +17,7 @@ use rand::rng;
 use std::fs;
 use std::process::exit;
 use std::time::SystemTime;
+use soklyn::io::save::SafetensorFile;
 
 const EPOCHS: usize = 100;
 const BATCH_SIZE: usize = 200;
@@ -89,9 +90,9 @@ fn run_pipeline() -> Result<(), Error> {
     }
 
     let mut layers = vec![];
-    let loaded_blocks = load_dense_blocks::<&str, f16>(
-        &context, "assets/data/cifar58.78.safetensors", true, BATCH_SIZE
-    )?;
+    let writer = SafetensorFile::read("assets/data/cifar53.86.safetensors")?;
+    println!("Metadata: {:?}", writer.get_metadata());
+    let loaded_blocks = writer.into_blocks(&context, true, BATCH_SIZE)?;
 
     for layer in loaded_blocks {
         layers.push(layer);
@@ -115,13 +116,9 @@ fn run_pipeline() -> Result<(), Error> {
 
             best = success;
 
-            let refs: Vec<&DenseBlock<Precision>> = layers.iter().collect();
-            save_dense_blocks_with_metadata(
-                &context,
-                format!("assets/data/cifar{:.2}.safetensors", best),
-                &refs,
-                &[("epoch", n.to_string())],
-            )?;
+            let mut writer = SafetensorFile::from_blocks(&context, &layers)?;
+            writer.pass_metadata(&"epoch", &n);
+            writer.save(format!("assets/data/cifar{:.2}.safetensors", best))?;
         }
     }
 

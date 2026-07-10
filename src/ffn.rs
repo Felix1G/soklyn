@@ -1,9 +1,10 @@
 use crate::io::device::GpuContext;
-use crate::layers::{save_dense_blocks, save_dense_blocks_with_metadata, DenseBlock};
+use crate::layers::DenseBlock;
 use crate::util::core::Tensor;
 use crate::util::log::Error;
 use crate::util::precision::PrecisionType;
 use std::path::Path;
+use crate::getter;
 use crate::util::functions::{Activation, LossFunc, Optimiser};
 
 pub struct FeedForwardNetwork<T: PrecisionType> {
@@ -179,59 +180,10 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
         Ok(())
     }
 
-    /// Provides a read-only reference to the individual layer components.
-    pub fn layers(&self) -> &[DenseBlock<T>] {
-        &self.layers
-    }
+    getter!(get_layers, layers, Vec<DenseBlock<T>>);
 
     /// Returns the total number of layers in the network.
     pub fn len(&self) -> usize {
         self.layers.len()
-    }
-
-    /// Saves the network into a .safetensors file.
-    ///
-    /// # Arguments
-    /// * `context` - See [`GpuContext`].
-    /// * `path` - Path of the save file.
-    ///
-    /// # Errors
-    /// This function will return an error if:
-    /// * [`Error::SerializationCasting`] - The underlying tensor raw numerical buffers fail memory alignment
-    ///   or size validation thresholds while being transmuted into binary safe arrays via `bytemuck`.
-    /// * [`Error::SerdeJSON`] - The provided metadata block cannot be parsed or mapped into valid JSON string parameters.
-    /// * [`Error::IOError`] - The system fails to create the file at the specified `path`, hits a storage capacity allocation
-    ///   threshold, or encounters an issue flushing the stream to disk.
-    pub fn save<P: AsRef<Path>>(&self, context: &GpuContext, path: P) -> Result<(), Error> {
-        let layer_refs: Vec<&DenseBlock<T>> = self.layers.iter().collect();
-        save_dense_blocks(context, path, &layer_refs)
-    }
-
-    /// Saves the network into a .safetensors file.
-    ///
-    /// # Arguments
-    /// * `context` - See [`GpuContext`].
-    /// * `path` - Path of the save file.
-    /// * `meta` - Metadata to be included inside the save file.
-    ///
-    /// # Errors
-    /// This function will return an error if:
-    /// * [`Error::SerializationCasting`] - The underlying tensor raw numerical buffers fail memory alignment
-    ///   or size validation thresholds while being transmuted into binary safe arrays via `bytemuck`.
-    /// * [`Error::SerdeJSON`] - The provided metadata block cannot be parsed or mapped into valid JSON string parameters.
-    /// * [`Error::IOError`] - The system fails to create the file at the specified `path`, hits a storage capacity allocation
-    ///   threshold, or encounters an issue flushing the stream to disk.
-    pub fn save_with_metadata<P: AsRef<Path>, K, V>(
-        &self,
-        context: &GpuContext,
-        path: P,
-        meta: &[(K, V)],
-    ) -> Result<(), Error>
-    where
-        K: AsRef<str>,
-        V: ToString,
-    {
-        let layer_refs: Vec<&DenseBlock<T>> = self.layers.iter().collect();
-        save_dense_blocks_with_metadata(context, path, &layer_refs, meta)
     }
 }
