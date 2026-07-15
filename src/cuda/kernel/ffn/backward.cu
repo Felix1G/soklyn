@@ -1,7 +1,7 @@
 #pragma once
 
-#ifndef BACKWARD_CU
-#define BACKWARD_CU
+#ifndef FFN_BACKWARD_CU
+#define FFN_BACKWARD_CU
 
 #include "../util.cu"
 #include "../math.cu"
@@ -32,9 +32,9 @@ constexpr f32_t LOSS_SCALE_INV = 1.0f / LOSS_SCALE;
  */
 // threadIdx.x corresponds to n (current weight columns/output features), threadIdx.y corresponds to m (batch size)
 template<typename T> __device__ inline void compute_output_layer_error_kernel(
-    const T* out, const T* preact_out, const T* target, const f32_t* master_norm_w,
+    const T* __restrict__ out, const T* __restrict__ preact_out, const T* __restrict__ target, const f32_t* master_norm_w,
     f32_t* dx_out, f32_t* d_prenorm_out, f32_t* dNorm_w, f32_t* dNorm_b,
-    const T* norm_rstd, const T* centered_out, const T* prenorm_out,
+    const T* __restrict__ norm_rstd, const T* __restrict__ centered_out, const T* __restrict__ prenorm_out,
     const uint32_t m, const uint32_t n, const uint32_t err_mode,
     const uint32_t norm, const uint32_t act, const f32_t leaky_relu_coeff
 ) {
@@ -66,9 +66,11 @@ template<typename T> __device__ inline void compute_output_layer_error_kernel(
 
         dx_out[idx] = err_delta_f32;
 
+        const uint32_t rstd_idx = norm == 3 /* BatchNorm */ ? col : b;
+
         dev_write_norm_gradients<T>(
             d_prenorm_out, dNorm_w, dNorm_b,
-            norm_rstd, centered_out, prenorm_out,
+            centered_out, prenorm_out, static_cast<f32_t>(norm_rstd[rstd_idx]),
             err_delta_f32, master_norm_w[col], LOSS_SCALE,
             norm, idx, inv_n, inv_m
         );
@@ -102,8 +104,8 @@ template<typename T> __device__ inline void compute_output_layer_error_kernel(
 template<typename T> __device__ inline void compute_hidden_layer_error_kernel(
     const f32_t* next_d_prenorm_out, const f32_t* master_w_next, const f32_t* master_norm_w,
     f32_t* dx_out, f32_t* d_prenorm_out, f32_t* dNorm_w, f32_t* dNorm_b,
-    const T* norm_rstd, const T* centered_out, const T* prenorm_out,
-    const T* predrop_out, const T* preact_out, const T* mask,
+    const T* __restrict__ norm_rstd, const T* __restrict__ centered_out, const T* __restrict__ prenorm_out,
+    const T* __restrict__ predrop_out, const T* __restrict__ preact_out, const T* __restrict__ mask,
     const uint32_t m, const uint32_t n, const uint32_t ec,
     const uint32_t norm, const uint32_t act, const f32_t leaky_relu_coeff
 ) {
@@ -133,9 +135,11 @@ template<typename T> __device__ inline void compute_hidden_layer_error_kernel(
         const f32_t final_delta_f32 = static_cast<f32_t>(mask[idx]) * derivative;
         dx_out[idx] = final_delta_f32;
 
+        const uint32_t rstd_idx = norm == 3 /* BatchNorm */ ? col : batch;
+
         dev_write_norm_gradients<T>(
             d_prenorm_out, dNorm_w, dNorm_b,
-            norm_rstd, centered_out, prenorm_out,
+            centered_out, prenorm_out, static_cast<f32_t>(norm_rstd[rstd_idx]),
             final_delta_f32, master_norm_w[col], 1.0f,
             norm, idx, inv_n, inv_m
         );
@@ -144,7 +148,7 @@ template<typename T> __device__ inline void compute_hidden_layer_error_kernel(
 
 // m = batch size, n = current layer weight columns (also output features), wr = current layer weight rows
 template<typename T> __device__ inline void dev_optimiser_update_param(
-    T* param, f32_t* master_param, f32_t* dv, f32_t* dm, uint32_t idx,
+    T* __restrict__ param, f32_t* master_param, f32_t* dv, f32_t* dm, uint32_t idx,
     const f32_t grad_acc, const f32_t inv_m, const f32_t lr, const f32_t max_grad_norm,
     const uint32_t optimiser, const f32_t beta1, const f32_t beta2, const f32_t epsilon,
     const uint32_t step, const uint32_t nesterov,
@@ -243,9 +247,9 @@ template<typename T> __device__ inline void dev_optimiser_update_param(
  */
 // threadIdx.x corresponds to n (current layer weight columns/output features), threadIdx.y corresponds to wr (current layer weight rows/input features)
 template<typename T> __device__ inline void backward_pass_kernel(
-    const T* x, T* w, T* b, f32_t* master_w, f32_t* master_b, f32_t* d_prenorm_out,
+    const T* __restrict__ x, T* __restrict__ w, T* __restrict__ b, f32_t* master_w, f32_t* master_b, f32_t* d_prenorm_out,
     f32_t* dv_w, f32_t* dv_b, f32_t* dm_w, f32_t* dm_b,
-    T* norm_w, T* norm_b, f32_t* master_norm_w, f32_t* master_norm_b, f32_t* dNorm_w, f32_t* dNorm_b,
+    T* __restrict__ norm_w, T* __restrict__ norm_b, f32_t* master_norm_w, f32_t* master_norm_b, f32_t* dNorm_w, f32_t* dNorm_b,
     f32_t* dv_norm_w, f32_t* dv_norm_b, f32_t* dm_norm_w, f32_t* dm_norm_b,
     const uint32_t use_bias, const uint32_t norm,
     const uint32_t m, const uint32_t n, const uint32_t wr, const f32_t lr, const f32_t max_grad_norm,

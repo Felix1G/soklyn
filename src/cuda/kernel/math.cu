@@ -73,14 +73,14 @@ template<typename T> __device__ inline void broadcast_kernel(T* dst, const T v, 
 * @return The value of the dot product of the vectors from the row of matrix A and the column of matrix B
  */
 template<typename T> __device__ inline T dev_gemm(
-    const T* a, const T* b,
+    const T* __restrict__ a, const T* __restrict__ b,
     const uint32_t m, const uint32_t n, const uint32_t p,
     const uint32_t tile_dim, const uint32_t row, const uint32_t col
 ) {
     extern __shared__ uint8_t gemm_shared_mem[];
 
-    T* tile_A = reinterpret_cast<T*>(gemm_shared_mem);
-    T* tile_B = tile_A + tile_dim * tile_dim;
+    T* __restrict__ tile_A = reinterpret_cast<T*>(gemm_shared_mem);
+    T* __restrict__ tile_B = tile_A + tile_dim * tile_dim;
 
     f32_t sum_f32 = 0.0f;
 
@@ -127,7 +127,7 @@ template<typename T> __device__ inline T dev_gemm(
  * @param tile_dim The dimension (both width and height) of the 2D thread block and data tile.
  */
 template<typename T> __device__ inline void gemm_kernel(
-    const T* a, const T* b, T* c,
+    const T* __restrict__ a, const T* __restrict__ b, T* __restrict__ c,
     const uint32_t m, const uint32_t n, const uint32_t p, const uint32_t tile_dim
 ) {
     const uint32_t row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -148,7 +148,7 @@ template<typename T> __device__ inline void gemm_kernel(
  * @param m Rows of each matrix.
  * @param n Columns of each matrix.
  */
-template<typename T> __device__ inline void geam_kernel(const T* a, const T* b, T* c, const uint32_t m, const uint32_t n) {
+template<typename T> __device__ inline void geam_kernel(const T* __restrict__ a, const T* __restrict__ b, T* __restrict__ c, const uint32_t m, const uint32_t n) {
     const uint32_t row = blockIdx.y * blockDim.y + threadIdx.y;
     if (const uint32_t col = blockIdx.x * blockDim.x + threadIdx.x; row < m && col < n) {
         const uint32_t idx = row * n + col;

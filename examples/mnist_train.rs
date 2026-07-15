@@ -3,13 +3,13 @@ use rand::prelude::SliceRandom;
 use rand::rng;
 use soklyn::ffn::FeedForwardNetwork;
 use soklyn::io::device::GpuContext;
-use soklyn::layers::DenseBlock;
-use soklyn::util::core::Tensor;
-use soklyn::util::functions::Activation::{Identity, LeakyReLU, Mish};
-use soklyn::util::functions::Normalisation::{BatchNorm, Disabled, LayerNorm};
-use soklyn::util::functions::Optimiser::Adam;
-use soklyn::util::functions::Regularisation::L2Regular;
-use soklyn::util::functions::{Activation, InitFunc, InitHeNormalFunc, LossFunc, Regularisation};
+use soklyn::mlp::DenseBlock;
+use soklyn::util::core::Tensor2D;
+use soklyn::util::function::Activation::{Identity, LeakyReLU, Mish};
+use soklyn::util::function::Normalisation::{BatchNorm, Disabled, LayerNorm};
+use soklyn::util::function::Optimiser::Adam;
+use soklyn::util::function::Regularisation::L2Regular;
+use soklyn::util::function::{Activation, InitFunc, InitHeNormalFunc, LossFunc, Regularisation};
 use soklyn::util::log::{init_log, Error};
 use soklyn::util::scheduler::{ReduceLROnPlateauScheduler, SchedulerMode};
 use std::process::exit;
@@ -79,9 +79,9 @@ fn run_pipeline() -> Result<(), Error> {
 
     // --- DEAD CODE RETAINED FOR TESTS ---
     let layers: Vec<DenseBlock<f32>> = vec![
-        DenseBlock::default(&context, true, 784, 2048, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 2048, 2048, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 2048, 10, BATCH_SIZE, &mut rand)
+        DenseBlock::default(&context, true, 784, 2048, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 2048, 2048, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 2048, 10, BATCH_SIZE, &mut rand)?
     ];
     
     let writer = SafetensorFile::read("assets/data/mnist7AEC.safetensors")?;
@@ -89,7 +89,7 @@ fn run_pipeline() -> Result<(), Error> {
     while layers.len() > 2 {
         layers.pop();
     }
-    layers.push(DenseBlock::default(&context, true, 256, 10, BATCH_SIZE, &mut rand));
+    layers.push(DenseBlock::default(&context, true, 256, 10, BATCH_SIZE, &mut rand)?);
 
     configure_layers_auto_encoder(&mut layers);
 
@@ -185,9 +185,9 @@ fn train(
                          &[adam, adam, adam], &[adam, adam, adam], lr, CLAMP, step)?;
         loss_ms += t1.elapsed().map_err(|_| Error::InvalidConfiguration { reason: "Clock rollback anomaly".to_string() })?.as_secs_f64() * 1000.0;
 
-        let out_vec = outs[2].download(context).v;
+        let out_vec = outs[2].download(context)?.v;
         assert_no_nan(&out_vec, &format!("training batch {batch_idx}"));
-        success += count_correct(&out_vec, &target_tensor.download(context).v, BATCH_SIZE)?;
+        success += count_correct(&out_vec, &target_tensor.download(context)?.v, BATCH_SIZE)?;
     }
 
     let accuracy = success as f64 / TRAIN_ELEMENTS as f64 * 100.0;
@@ -214,10 +214,10 @@ fn test(
     for (batch_idx, batch_ids) in (0..TEST_ELEMENTS).collect::<Vec<_>>().chunks(BATCH_SIZE).enumerate() {
         let (input, labels) = build_batch(context, &mnist.tst_img, &mnist.tst_lbl, batch_ids, BATCH_SIZE, 784, 10)?;
         let outs = network.forward(context, &input, BATCH_SIZE,false, batch_idx)?;
-        let out_mat = outs[2].download(context);
+        let out_mat = outs[2].download(context)?;
 
         assert_no_nan(&out_mat.v, &format!("testing batch {batch_idx}"));
-        success += count_correct(&out_mat.v, &labels.download(context).v, BATCH_SIZE)?;
+        success += count_correct(&out_mat.v, &labels.download(context)?.v, BATCH_SIZE)?;
     }
 
     let accuracy = success as f64 / TEST_ELEMENTS as f64 * 100.0;
@@ -254,7 +254,7 @@ fn build_batch(
     batch_size: usize,
     img_size: usize,
     label_size: usize,
-) -> Result<(Tensor<f32>, Tensor<f32>), Error> {
+) -> Result<(Tensor2D<f32>, Tensor2D<f32>), Error> {
     let mut pixels = Vec::with_capacity(ids.len() * img_size);
     let mut labels = Vec::with_capacity(ids.len() * label_size);
 
@@ -264,8 +264,8 @@ fn build_batch(
     }
 
     Ok((
-        Tensor::from_cpu_vector(context, &pixels, &[batch_size, img_size]),
-        Tensor::from_cpu_vector(context, &labels, &[batch_size, label_size]),
+        Tensor2D::from_cpu_vector(context, &pixels, &[batch_size, img_size])?,
+        Tensor2D::from_cpu_vector(context, &labels, &[batch_size, label_size])?,
     ))
 }
 

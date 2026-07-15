@@ -1,7 +1,7 @@
 #pragma once
 
-#ifndef BACKWARD_WMMA_CU
-#define BACKWARD_WMMA_CU
+#ifndef FFN_BACKWARD_WMMA_CU
+#define FFN_BACKWARD_WMMA_CU
 
 #include "../math.cu"
 #include "../util.cu"
@@ -87,9 +87,11 @@ __device__ inline void compute_hidden_layer_error_wmma_kernel(
         const f32_t final_delta_f32 = static_cast<f32_t>(mask[idx]) * derivative;
         dx_out[idx] = final_delta_f32;
 
+        const uint32_t rstd_idx = norm == 3 /* BatchNorm */ ? final_col : final_row;
+
         dev_write_norm_gradients<f16_t>(
             d_prenorm_out, dNorm_w, dNorm_b,
-            norm_rstd, centered_out, prenorm_out,
+            centered_out, prenorm_out, norm_rstd[rstd_idx],
             final_delta_f32, master_norm_w[final_col], 1.0f,
             norm, idx, inv_n, inv_m
         );

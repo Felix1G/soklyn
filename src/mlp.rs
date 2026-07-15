@@ -1,28 +1,29 @@
 use crate::io::device::GpuContext;
-use crate::util::core::Tensor;
-use crate::util::functions::Activation::Identity;
-use crate::util::functions::InitFunc;
-use crate::util::functions::Normalisation::Disabled;
-use crate::util::functions::{
+use crate::util::core::Tensor2D;
+use crate::util::function::Activation::Identity;
+use crate::util::function::InitFunc;
+use crate::util::function::Normalisation::Disabled;
+use crate::util::function::{
     Activation, LossFunc, Normalisation, Optimiser, Regularisation,
 };
 use crate::util::log::Error;
-use crate::util::precision::{CastPrecision, Precision, PrecisionType};
+use crate::util::r#type::{CastPrecision, Precision, PrecisionType};
 use derivative::Derivative;
 use half::f16;
 use rand::rngs::ThreadRng;
-use crate::{getter, getter_copy, getter_unwrap, setter};
+use crate::{getter, getter_copy, getter_option, getter_unwrap, setter};
+use crate::core::Tensor1D;
 
 #[derive(Debug)]
 pub(crate) struct ParamState<T: PrecisionType> {
-    w: Tensor<T>,
-    b: Tensor<T>,
-    master_w: Option<Tensor<f32>>,
-    master_b: Option<Tensor<f32>>,
-    dv_w: Option<Tensor<f32>>,
-    dv_b: Option<Tensor<f32>>,
-    dm_w: Option<Tensor<f32>>,
-    dm_b: Option<Tensor<f32>>,
+    w: Tensor2D<T>,
+    b: Tensor2D<T>,
+    master_w: Option<Tensor2D<f32>>,
+    master_b: Option<Tensor2D<f32>>,
+    dv_w: Option<Tensor2D<f32>>,
+    dv_b: Option<Tensor2D<f32>>,
+    dm_w: Option<Tensor2D<f32>>,
+    dm_b: Option<Tensor2D<f32>>,
 }
 
 impl<T: PrecisionType> ParamState<T> {
@@ -30,14 +31,14 @@ impl<T: PrecisionType> ParamState<T> {
         context: &GpuContext,
         w_vec: &[T],
         shape: &[usize; 2],
-    ) -> Option<Tensor<f32>> {
+    ) -> Result<Option<Tensor2D<f32>>, Error> {
         match T::precision() {
             Precision::FP32 => None,
             Precision::FP16 => {
                 let f32_vec = w_vec.iter().map(|x| x.to_f32()).collect::<Vec<f32>>();
-                Some(Tensor::<f32>::from_cpu_vector(context, &f32_vec, shape))
+                Some(Tensor2D::<f32>::from_cpu_vector(context, &f32_vec, shape))
             }
-        }
+        }.transpose()
     }
 
     pub(crate) fn new_linear(
@@ -46,69 +47,69 @@ impl<T: PrecisionType> ParamState<T> {
         w_shape: &[usize; 2],
         b_shape: &[usize; 2],
         is_training: bool,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let get_delta_tensor = |shape: &[usize; 2]| {
             if is_training {
-                Some(Tensor::<f32>::zeros(context, shape))
+                Some(Tensor2D::<f32>::zeros(context, shape))
             } else {
                 None
             }
-        };
+        }.transpose();
 
-        Self {
-            w: Tensor::<T>::from_cpu_vector(context, w_vec, w_shape),
-            b: Tensor::<T>::zeros(context, b_shape),
-            master_w: Self::maybe_master_tensor(context, w_vec, w_shape),
+        Ok(Self {
+            w: Tensor2D::<T>::from_cpu_vector(context, w_vec, w_shape)?,
+            b: Tensor2D::<T>::zeros(context, b_shape)?,
+            master_w: Self::maybe_master_tensor(context, w_vec, w_shape)?,
             master_b: match T::precision() {
                 Precision::FP32 => None,
-                Precision::FP16 => Some(Tensor::<f32>::zeros(context, b_shape)),
+                Precision::FP16 => Some(Tensor2D::<f32>::zeros(context, b_shape)?),
             },
-            dv_w: get_delta_tensor(w_shape),
-            dv_b: get_delta_tensor(b_shape),
-            dm_w: get_delta_tensor(w_shape),
-            dm_b: get_delta_tensor(b_shape),
-        }
+            dv_w: get_delta_tensor(w_shape)?,
+            dv_b: get_delta_tensor(b_shape)?,
+            dm_w: get_delta_tensor(w_shape)?,
+            dm_b: get_delta_tensor(b_shape)?,
+        })
     }
 
-    pub(crate) fn new_norm(context: &GpuContext, shape: &[usize; 2], is_training: bool) -> Self {
+    pub(crate) fn new_norm(context: &GpuContext, shape: &[usize; 2], is_training: bool) -> Result<Self, Error> {
         let get_delta_tensor = || {
             if is_training {
-                Some(Tensor::<f32>::zeros(context, shape))
+                Some(Tensor2D::<f32>::zeros(context, shape))
             } else {
                 None
             }
-        };
+        }.transpose();
 
-        Self {
-            w: Tensor::<T>::fill(context, shape, T::from_f32(1.0)),
-            b: Tensor::<T>::zeros(context, shape),
+        Ok(Self {
+            w: Tensor2D::<T>::fill(context, shape, T::from_f32(1.0))?,
+            b: Tensor2D::<T>::zeros(context, shape)?,
             master_w: match T::precision() {
                 Precision::FP32 => None,
-                Precision::FP16 => Some(Tensor::<f32>::fill(context, shape, 1.0)),
+                Precision::FP16 => Some(Tensor2D::<f32>::fill(context, shape, 1.0)?),
             },
             master_b: match T::precision() {
                 Precision::FP32 => None,
-                Precision::FP16 => Some(Tensor::<f32>::zeros(context, shape)),
+                Precision::FP16 => Some(Tensor2D::<f32>::zeros(context, shape)?),
             },
-            dv_w: get_delta_tensor(),
-            dv_b: get_delta_tensor(),
-            dm_w: get_delta_tensor(),
-            dm_b: get_delta_tensor(),
-        }
+            dv_w: get_delta_tensor()?,
+            dv_b: get_delta_tensor()?,
+            dm_w: get_delta_tensor()?,
+            dm_b: get_delta_tensor()?,
+        })
     }
 
     pub(crate) fn validate(&self) -> Result<(), Error> {
         if let Some(ref dv_w) = self.dv_w {
             if self.w.rows() != dv_w.rows() {
                 return Err(Error::MismatchedDimensions {
-                    context: "optimizer state weight vs dv_w rows",
+                    reason: "optimizer state weight vs dv_w rows",
                     expected: self.w.rows(),
                     found: dv_w.rows(),
                 });
             }
             if self.w.cols() != dv_w.cols() {
                 return Err(Error::MismatchedDimensions {
-                    context: "optimizer state weight vs dv_w columns",
+                    reason: "optimizer state weight vs dv_w columns",
                     expected: self.w.cols(),
                     found: dv_w.cols(),
                 });
@@ -118,14 +119,14 @@ impl<T: PrecisionType> ParamState<T> {
         if let Some(ref dm_w) = self.dm_w {
             if self.w.rows() != dm_w.rows() {
                 return Err(Error::MismatchedDimensions {
-                    context: "optimizer state weight vs dm_w rows",
+                    reason: "optimizer state weight vs dm_w rows",
                     expected: self.w.rows(),
                     found: dm_w.rows(),
                 });
             }
             if self.w.cols() != dm_w.cols() {
                 return Err(Error::MismatchedDimensions {
-                    context: "optimizer state weight vs dm_w columns",
+                    reason: "optimizer state weight vs dm_w columns",
                     expected: self.w.cols(),
                     found: dm_w.cols(),
                 });
@@ -135,14 +136,14 @@ impl<T: PrecisionType> ParamState<T> {
         if let Some(ref dv_b) = self.dv_b {
             if self.b.rows() != dv_b.rows() {
                 return Err(Error::MismatchedDimensions {
-                    context: "optimizer state bias vs dv_b rows",
+                    reason: "optimizer state bias vs dv_b rows",
                     expected: self.b.rows(),
                     found: dv_b.rows(),
                 });
             }
             if self.b.cols() != dv_b.cols() {
                 return Err(Error::MismatchedDimensions {
-                    context: "optimizer state bias vs dv_b columns",
+                    reason: "optimizer state bias vs dv_b columns",
                     expected: self.b.cols(),
                     found: dv_b.cols(),
                 });
@@ -152,14 +153,14 @@ impl<T: PrecisionType> ParamState<T> {
         if let Some(ref dm_b) = self.dm_b {
             if self.b.rows() != dm_b.rows() {
                 return Err(Error::MismatchedDimensions {
-                    context: "optimizer state bias vs dm_b rows",
+                    reason: "optimizer state bias vs dm_b rows",
                     expected: self.b.rows(),
                     found: dm_b.rows(),
                 });
             }
             if self.b.cols() != dm_b.cols() {
                 return Err(Error::MismatchedDimensions {
-                    context: "optimizer state bias vs dm_b columns",
+                    reason: "optimizer state bias vs dm_b columns",
                     expected: self.b.cols(),
                     found: dm_b.cols(),
                 });
@@ -170,14 +171,14 @@ impl<T: PrecisionType> ParamState<T> {
     }
 
     pub(crate) fn from_tensors(
-        w: Tensor<T>,
-        b: Tensor<T>,
-        master_w: Option<Tensor<f32>>,
-        master_b: Option<Tensor<f32>>,
-        dv_w: Option<Tensor<f32>>,
-        dv_b: Option<Tensor<f32>>,
-        dm_w: Option<Tensor<f32>>,
-        dm_b: Option<Tensor<f32>>,
+        w: Tensor2D<T>,
+        b: Tensor2D<T>,
+        master_w: Option<Tensor2D<f32>>,
+        master_b: Option<Tensor2D<f32>>,
+        dv_w: Option<Tensor2D<f32>>,
+        dv_b: Option<Tensor2D<f32>>,
+        dm_w: Option<Tensor2D<f32>>,
+        dm_b: Option<Tensor2D<f32>>,
     ) -> Self {
         Self {
             w, b, master_w, master_b, dv_w, dv_b, dm_w, dm_b
@@ -223,24 +224,24 @@ impl ParamState<f32> {
 
 #[derive(Debug)]
 pub(crate) struct ForwardCache<T: PrecisionType> {
-    out: Tensor<T>,
-    predrop_out: Tensor<T>,
-    preact_out: Tensor<T>,
-    centered_out: Tensor<T>,
-    prenorm_out: Tensor<T>,
-    norm_rstd: Tensor<T>,
+    out: Tensor2D<T>,
+    predrop_out: Tensor2D<T>,
+    preact_out: Tensor2D<T>,
+    centered_out: Tensor2D<T>,
+    prenorm_out: Tensor2D<T>,
+    norm_rstd: Tensor1D<T>,
 }
 
 impl<T: PrecisionType> ForwardCache<T> {
-    fn new(context: &GpuContext, max_batch_size: usize, outputs: usize) -> Self {
-        Self {
-            out: Tensor::<T>::zeros(context, &[max_batch_size, outputs]),
-            predrop_out: Tensor::<T>::zeros(context, &[max_batch_size, outputs]),
-            preact_out: Tensor::<T>::zeros(context, &[max_batch_size, outputs]),
-            centered_out: Tensor::<T>::zeros(context, &[max_batch_size, outputs]),
-            prenorm_out: Tensor::<T>::zeros(context, &[max_batch_size, outputs]),
-            norm_rstd: Tensor::<T>::zeros(context, &[max_batch_size, outputs]),
-        }
+    fn new(context: &GpuContext, max_batch_size: usize, outputs: usize) -> Result<Self, Error> {
+        Ok(Self {
+            out: Tensor2D::<T>::zeros(context, &[max_batch_size, outputs])?,
+            predrop_out: Tensor2D::<T>::zeros(context, &[max_batch_size, outputs])?,
+            preact_out: Tensor2D::<T>::zeros(context, &[max_batch_size, outputs])?,
+            centered_out: Tensor2D::<T>::zeros(context, &[max_batch_size, outputs])?,
+            prenorm_out: Tensor2D::<T>::zeros(context, &[max_batch_size, outputs])?,
+            norm_rstd: Tensor1D::<T>::zeros(context, &[usize::max(max_batch_size, outputs)])?,
+        })
     }
 
     fn cast<U: PrecisionType>(self, context: &GpuContext) -> Result<ForwardCache<U>, Error> {
@@ -272,11 +273,11 @@ pub struct DenseBlock<T: PrecisionType> {
     linear_state: ParamState<T>,
     norm_state: ParamState<T>,
     forward_cache: ForwardCache<T>,
-    grad: Option<Tensor<f32>>,
-    d_prenorm_out: Option<Tensor<f32>>,
-    d_norm_w: Option<Tensor<f32>>,
-    d_norm_b: Option<Tensor<f32>>,
-    mask: Tensor<T>, // for dropout
+    grad: Option<Tensor2D<f32>>,
+    d_prenorm_out: Option<Tensor2D<f32>>,
+    d_norm_w: Option<Tensor2D<f32>>,
+    d_norm_b: Option<Tensor2D<f32>>,
+    mask: Tensor2D<T>, // for dropout
     normalisation: Normalisation,
     activation: Activation,
     regularisation: Regularisation,
@@ -307,7 +308,7 @@ impl<T: PrecisionType> DenseBlock<T> {
         outputs: usize,
         max_batch_size: usize,
         init: &mut I,
-    ) -> Self {
+    ) -> Result<DenseBlock<T>, Error> {
         Self::new(
             context,
             is_training,
@@ -335,7 +336,8 @@ impl<T: PrecisionType> DenseBlock<T> {
     /// * `init` - See [`InitFunc`]. Used for initialising weights.
     /// * `normalisation` - See [`Normalisation`]. Pass [`Disabled`] to disable normalisation.
     /// * `activation` - See [`Activation`]. Pass [`Identity`] to set this layer to an output layer.
-    /// * `mask_coeff` - Mask coefficient
+    /// * `regularisation` - See [`Regularisation`]. Pass [`Regularisation::None`] to disable regularisation.
+    /// * `mask_coeff` - Mask coefficient for dropout.
     pub fn new<I: InitFunc>(
         context: &GpuContext,
         is_training: bool,
@@ -347,23 +349,31 @@ impl<T: PrecisionType> DenseBlock<T> {
         activation: Activation,
         regularisation: Regularisation,
         mask_coeff: f32,
-    ) -> Self {
-        let w_vec = init.init(inputs, outputs);
+    ) -> Result<Self, Error> {
+        if inputs == 0 || outputs == 0 {
+            return Err(Error::InvalidConfiguration { reason: String::from("Input or output size cannot be 0.") });
+        }
+
+        if max_batch_size == 0 {
+            return Err(Error::InvalidConfiguration { reason: String::from("Batch size cannot be 0.") });
+        }
+
+        let w_vec = init.init(inputs, outputs, inputs * outputs);
 
         let weight_shape = [inputs, outputs];
         let bias_shape = [1, outputs];
 
-        Self::from_tensors(
+        Ok(Self::from_tensors(
             context,
             is_training,
-            ParamState::new_linear(context, &w_vec, &weight_shape, &bias_shape, is_training),
-            ParamState::new_norm(context, &bias_shape, is_training),
+            ParamState::new_linear(context, &w_vec, &weight_shape, &bias_shape, is_training)?,
+            ParamState::new_norm(context, &bias_shape, is_training)?,
             normalisation,
             activation,
             regularisation,
             max_batch_size,
             mask_coeff,
-        ).unwrap()
+        )?)
     }
 
     pub(crate) fn from_tensors(
@@ -384,22 +394,22 @@ impl<T: PrecisionType> DenseBlock<T> {
         let batch_shape = [max_batch_size, wc];
         let get_delta_tensor = || {
             if is_training {
-                Some(Tensor::<f32>::zeros(context, &batch_shape))
+                Some(Tensor2D::<f32>::zeros(context, &batch_shape))
             } else {
                 None
             }
-        };
+        }.transpose();
 
         Ok(Self {
             linear_state,
             norm_state,
-            forward_cache: ForwardCache::new(context, max_batch_size, wc),
+            forward_cache: ForwardCache::new(context, max_batch_size, wc)?,
 
-            grad: get_delta_tensor(),
-            d_prenorm_out: get_delta_tensor(),
-            d_norm_w: get_delta_tensor(),
-            d_norm_b: get_delta_tensor(),
-            mask: Tensor::fill(context, &batch_shape, T::from_f32(1.0)),
+            grad: get_delta_tensor()?,
+            d_prenorm_out: get_delta_tensor()?,
+            d_norm_w: get_delta_tensor()?,
+            d_norm_b: get_delta_tensor()?,
+            mask: Tensor2D::fill(context, &batch_shape, T::from_f32(1.0))?,
 
             normalisation,
             activation,
@@ -412,56 +422,56 @@ impl<T: PrecisionType> DenseBlock<T> {
     }
 
     // --- Linear State Getters ---
-    getter!(get_weights, linear_state.w, Tensor<T>);
-    getter!(get_biases, linear_state.b, Tensor<T>);
-    getter!(get_master_weights, linear_state.master_w, Option<Tensor<f32>>);
-    getter!(get_master_biases, linear_state.master_b, Option<Tensor<f32>>);
-    getter_unwrap!(get_dv_weights, linear_state.dv_w, Tensor<f32>);
-    getter_unwrap!(get_dv_biases, linear_state.dv_b, Tensor<f32>);
-    getter_unwrap!(get_dm_weights, linear_state.dm_w, Tensor<f32>);
-    getter_unwrap!(get_dm_biases, linear_state.dm_b, Tensor<f32>);
+    getter!(pub get_weights, linear_state.w, Tensor2D<T>);
+    getter!(pub get_biases, linear_state.b, Tensor2D<T>);
+    getter_option!(pub get_master_weights, linear_state.master_w, Option<Tensor2D<f32>>);
+    getter_option!(pub get_master_biases, linear_state.master_b, Option<Tensor2D<f32>>);
+    getter_unwrap!(pub get_dv_weights, linear_state.dv_w, Tensor2D<f32>);
+    getter_unwrap!(pub get_dv_biases, linear_state.dv_b, Tensor2D<f32>);
+    getter_unwrap!(pub get_dm_weights, linear_state.dm_w, Tensor2D<f32>);
+    getter_unwrap!(pub get_dm_biases, linear_state.dm_b, Tensor2D<f32>);
 
     // --- Norm State Getters ---
-    getter!(get_norm_weights, norm_state.w, Tensor<T>);
-    getter!(get_norm_biases, norm_state.b, Tensor<T>);
-    getter!(get_master_norm_weights, norm_state.master_w, Option<Tensor<f32>>);
-    getter!(get_master_norm_biases, norm_state.master_b, Option<Tensor<f32>>);
-    getter_unwrap!(get_norm_weights_grad, d_norm_w, Tensor<f32>);
-    getter_unwrap!(get_norm_biases_grad, d_norm_b, Tensor<f32>);
-    getter_unwrap!(get_dv_norm_weights, norm_state.dv_w, Tensor<f32>);
-    getter_unwrap!(get_dv_norm_biases, norm_state.dv_b, Tensor<f32>);
-    getter_unwrap!(get_dm_norm_weights, norm_state.dm_w, Tensor<f32>);
-    getter_unwrap!(get_dm_norm_biases, norm_state.dm_b, Tensor<f32>);
+    getter!(pub get_norm_weights, norm_state.w, Tensor2D<T>);
+    getter!(pub get_norm_biases, norm_state.b, Tensor2D<T>);
+    getter_option!(pub get_master_norm_weights, norm_state.master_w, Option<Tensor2D<f32>>);
+    getter_option!(pub get_master_norm_biases, norm_state.master_b, Option<Tensor2D<f32>>);
+    getter_unwrap!(pub get_norm_weights_grad, d_norm_w, Tensor2D<f32>);
+    getter_unwrap!(pub get_norm_biases_grad, d_norm_b, Tensor2D<f32>);
+    getter_unwrap!(pub get_dv_norm_weights, norm_state.dv_w, Tensor2D<f32>);
+    getter_unwrap!(pub get_dv_norm_biases, norm_state.dv_b, Tensor2D<f32>);
+    getter_unwrap!(pub get_dm_norm_weights, norm_state.dm_w, Tensor2D<f32>);
+    getter_unwrap!(pub get_dm_norm_biases, norm_state.dm_b, Tensor2D<f32>);
 
     // --- Forward Cache & Grads ---
-    getter!(get_outputs, forward_cache.out, Tensor<T>);
-    getter!(get_predrop_outputs, forward_cache.predrop_out, Tensor<T>);
-    getter!(get_preact_outputs, forward_cache.preact_out, Tensor<T>);
-    getter!(get_centered_outputs, forward_cache.centered_out, Tensor<T>);
-    getter!(get_prenorm_outputs, forward_cache.prenorm_out, Tensor<T>);
-    getter!(get_norm_rstd, forward_cache.norm_rstd, Tensor<T>);
-    getter_unwrap!(get_grads, grad, Tensor<f32>);
-    getter_unwrap!(get_delta_prenorm_out, d_prenorm_out, Tensor<f32>);
-    getter!(get_masks, mask, Tensor<T>);
+    getter!(pub get_outputs, forward_cache.out, Tensor2D<T>);
+    getter!(pub get_predrop_outputs, forward_cache.predrop_out, Tensor2D<T>);
+    getter!(pub get_preact_outputs, forward_cache.preact_out, Tensor2D<T>);
+    getter!(pub get_centered_outputs, forward_cache.centered_out, Tensor2D<T>);
+    getter!(pub get_prenorm_outputs, forward_cache.prenorm_out, Tensor2D<T>);
+    getter!(pub get_norm_rstd, forward_cache.norm_rstd, Tensor1D<T>);
+    getter_unwrap!(pub get_grads, grad, Tensor2D<f32>);
+    getter_unwrap!(pub get_delta_prenorm_out, d_prenorm_out, Tensor2D<f32>);
+    getter!(pub get_masks, mask, Tensor2D<T>);
 
     // --- Config & Metadata Getters/Setters ---
-    getter_copy!(get_max_batch_size, max_batch_size, usize);
-    getter_copy!(get_mask_coeff, mask_coeff, f32);
-    setter!(set_mask_coeff, mask_coeff, f32);
-    getter!(get_normalisation, normalisation, Normalisation);
-    setter!(set_normalisation, normalisation, Normalisation);
-    getter!(get_activation, activation, Activation);
-    setter!(set_activation, activation, Activation);
-    getter!(get_regularisation, regularisation, Regularisation);
-    setter!(set_regularisation, regularisation, Regularisation);
-    getter_copy!(is_training_mode, is_training, bool);
+    getter_copy!(pub get_max_batch_size, max_batch_size, usize);
+    getter_copy!(pub get_mask_coeff, mask_coeff, f32);
+    setter!(pub set_mask_coeff, mask_coeff, f32);
+    getter!(pub get_normalisation, normalisation, Normalisation);
+    setter!(pub set_normalisation, normalisation, Normalisation);
+    getter!(pub get_activation, activation, Activation);
+    setter!(pub set_activation, activation, Activation);
+    getter!(pub get_regularisation, regularisation, Regularisation);
+    setter!(pub set_regularisation, regularisation, Regularisation);
+    getter_copy!(pub is_training_mode, is_training, bool);
 
     /// Sets all the elements in the `mask` tensor back to 1.0
     ///
     /// # Arguments
     /// * `context` - See [`GpuContext`].
-    pub fn reset_mask(&mut self, context: &GpuContext) {
-        self.mask.broadcast(context, T::from_f32(1.0));
+    pub fn reset_mask(&mut self, context: &GpuContext) -> Result<(), Error> {
+        self.mask.broadcast(context, T::from_f32(1.0))
     }
 
     /// Safely remove this block from memory.
@@ -474,20 +484,49 @@ impl<T: PrecisionType> DenseBlock<T> {
         Ok(())
     }
 
-    /// Forward propagation. The matrices are row-major i.e. batch size is determined from the
-    /// number of rows of `input`.
+    fn check_input_dimension(&self, input: &Tensor2D<T>, batch_size: usize) -> Result<(), Error> {
+        if input.rows() < batch_size {
+            return Err(Error::MismatchedDimensions {
+                reason: "forward input rows vs explicit batch size",
+                expected: batch_size,
+                found: input.rows(),
+            });
+        }
+
+        if input.rows() > self.max_batch_size {
+            return Err(Error::AllocationLimitExceeded {
+                received: input.rows(),
+                max: self.max_batch_size,
+                reason: "input batches"
+            });
+        }
+
+        let expected_features = self.linear_state.w.rows();
+        if input.cols() != expected_features {
+            return Err(Error::MismatchedDimensions {
+                reason: "forward input feature columns mismatch",
+                expected: expected_features,
+                found: input.cols(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Forward propagation. The matrices are row-major.
     ///
     /// # Arguments
     /// * `context` - GPU Context. See [`GpuContext`].
-    /// * `input` - A [`Tensor<T>`] with size `(batch size, input features)` representing
+    /// * `input` - A [`Tensor2D<T>`] with size `(batch size, input features)` representing
     /// the current input batch.
     /// * `batch_size` - Batch size of `input`. If the input rows exceed `batch_size`, only the
     /// first `batch_size` rows will be considered.
     /// * `use_dropout` - Whether the forward pass is part of the training loop. If set to `false`,
     /// the dropout feature will be bypassed.
+    /// * `step` - The current training iteration step.
     ///
     /// # Returns
-    /// A [`Tensor<T>`] reference to this tensor's `out`.
+    /// A [`Tensor2D<T>`] reference to this tensor's `out`.
     ///
     /// # Errors
     /// This function will return an error if:
@@ -504,11 +543,11 @@ impl<T: PrecisionType> DenseBlock<T> {
     pub fn forward(
         &self,
         context: &GpuContext,
-        input: &Tensor<T>,
+        input: &Tensor2D<T>,
         batch_size: usize,
         use_dropout: bool,
         step: usize,
-    ) -> Result<&Tensor<T>, Error> {
+    ) -> Result<&Tensor2D<T>, Error> {
         self.check_input_dimension(input, batch_size)?;
 
         if self.activation == Activation::Softmax {
@@ -531,43 +570,11 @@ impl<T: PrecisionType> DenseBlock<T> {
             self,
             input,
             batch_size,
-            match self.activation {
-                Activation::LeakyReLU(value) => value,
-                _ => 0.0,
-            },
             use_dropout,
             step,
         )?;
 
         Ok(&self.forward_cache.out)
-    }
-
-    fn check_input_dimension(&self, input: &Tensor<T>, batch_size: usize) -> Result<(), Error> {
-        if input.rows() < batch_size {
-            return Err(Error::MismatchedDimensions {
-                context: "forward input rows vs explicit batch size",
-                expected: batch_size,
-                found: input.rows(),
-            });
-        }
-
-        if input.rows() > self.max_batch_size {
-            return Err(Error::AllocationLimitExceeded {
-                received: input.rows(),
-                max: self.max_batch_size,
-            });
-        }
-
-        let expected_features = self.linear_state.w.rows();
-        if input.cols() != expected_features {
-            return Err(Error::MismatchedDimensions {
-                context: "forward input feature columns mismatch",
-                expected: expected_features,
-                found: input.cols(),
-            });
-        }
-
-        Ok(())
     }
 
     /// Computes the backward propagation for network deep learning. Output values are
@@ -578,13 +585,13 @@ impl<T: PrecisionType> DenseBlock<T> {
     ///
     /// # Arguments
     /// * `context` - GPU Context. See [`GpuContext`].
-    /// * `input` - A [`Tensor<T>`] that contains the input to this layer during the forward pass.
+    /// * `input` - A [`Tensor2D<T>`] that contains the input to this layer during the forward pass.
     /// * `batch_size` - Size of the batch.
     /// * `optimiser` - This [`Optimiser`] is used for linear weights and biases.
     /// * `norm_optimiser` - This [`Optimiser`] is used for normalisation weights and biases.
     /// * `learn_rate` - The learning rate of the network. Ideally, it should be between `0.0` exclusive and `1.0` inclusive.
     /// * `max_grad_norm` - Clamps gradient values between -`max_grad_norm` and +`max_grad_norm`. Pass [`f32::MAX`] to turn off clamping.
-    /// * `step` - The current learning step.
+    /// * `step` - The current training iteration step.
     ///
     /// # Errors
     /// This function will return an error if:
@@ -602,7 +609,7 @@ impl<T: PrecisionType> DenseBlock<T> {
     pub fn backward_output(
         &self,
         context: &GpuContext,
-        input: &Tensor<T>,
+        input: &Tensor2D<T>,
         batch_size: usize,
         optimiser: &Optimiser,
         norm_optimiser: &Optimiser,
@@ -611,7 +618,7 @@ impl<T: PrecisionType> DenseBlock<T> {
         step: usize,
     ) -> Result<(), Error> {
         if !self.is_training {
-            return Err(Error::TrainingModeRequired);
+            return Err(Error::TrainingModeRequired("output layer backward pass"));
         }
 
         self.check_input_dimension(input, batch_size)?;
@@ -652,15 +659,15 @@ impl<T: PrecisionType> DenseBlock<T> {
     ///
     /// # Arguments
     /// * `context` - GPU Context. See [`GpuContext`].
-    /// * `next_err` - A [`Tensor<T>`] containing the error deltas of the next layer.
-    /// * `next_weights` - A [`Tensor<T>`] containing the weights of the next layer.
-    /// * `input` - A [`Tensor<T>`] that contains the input to this layer during the forward pass.
+    /// * `next_err` - A [`Tensor2D<T>`] containing the error deltas of the next layer.
+    /// * `next_weights` - A [`Tensor2D<T>`] containing the weights of the next layer.
+    /// * `input` - A [`Tensor2D<T>`] that contains the input to this layer during the forward pass.
     /// * `batch_size` - Size of the batch.
     /// * `optimiser` - This [`Optimiser`] is used for linear weights and biases.
     /// * `norm_optimiser` - This [`Optimiser`] is used for normalisation weights and biases.
     /// * `learn_rate` - The learning rate of the network. Ideally, it should be between `0.0` exclusive and `1.0` inclusive.
     /// * `max_grad_norm` - Clamps gradient values between -`max_grad_norm` and +`max_grad_norm`. Pass [`f32::MAX`] to turn off clamping.
-    /// * `step` - The current learning step.
+    /// * `step` - The current training iteration step.
     ///
     /// # Errors
     /// This function will return an error if:
@@ -682,7 +689,7 @@ impl<T: PrecisionType> DenseBlock<T> {
         &self,
         context: &GpuContext,
         next_layer: &DenseBlock<T>,
-        input: &Tensor<T>,
+        input: &Tensor2D<T>,
         batch_size: usize,
         optimiser: &Optimiser,
         norm_optimiser: &Optimiser,
@@ -691,7 +698,7 @@ impl<T: PrecisionType> DenseBlock<T> {
         step: usize,
     ) -> Result<(), Error> {
         if !self.is_training {
-            return Err(Error::TrainingModeRequired);
+            return Err(Error::TrainingModeRequired("hidden layer backward pass"));
         }
 
         self.check_input_dimension(input, batch_size)?;
@@ -700,7 +707,7 @@ impl<T: PrecisionType> DenseBlock<T> {
         let next_rows = next_layer.get_weights().rows();
         if next_rows != current_cols {
             return Err(Error::MismatchedDimensions {
-                context: "backprop weight adjacency (next layer rows vs current cols)",
+                reason: "backward pass weight adjacency (next layer rows vs current cols)",
                 expected: current_cols,
                 found: next_rows,
             });
@@ -709,7 +716,7 @@ impl<T: PrecisionType> DenseBlock<T> {
         let next_grad_rows = next_layer.get_grads().rows();
         if next_grad_rows != input.rows() {
             return Err(Error::MismatchedDimensions {
-                context: "backprop activation gradient batch rows mismatch",
+                reason: "backward pass activation gradient vs batch rows mismatch",
                 expected: input.rows(),
                 found: next_grad_rows,
             });
@@ -751,7 +758,7 @@ impl<T: PrecisionType> DenseBlock<T> {
     ///
     /// # Arguments
     /// * `context` - GPU Context. See [`GpuContext`].
-    /// * `target` - A [`Tensor<T>`] with size `(batch size, output features)` representing
+    /// * `target` - A [`Tensor2D<T>`] with size `(batch size, output features)` representing
     /// the current target batch.
     /// * `err_mode` - See [`LossFunc`] for the available error functions.
     /// * `act_mode` - See [`Activation`] for the available activation functions.
@@ -766,17 +773,17 @@ impl<T: PrecisionType> DenseBlock<T> {
     pub fn compute_loss(
         &self,
         context: &GpuContext,
-        target: &Tensor<T>,
+        target: &Tensor2D<T>,
         err_mode: LossFunc,
         act_mode: Activation,
     ) -> Result<(), Error> {
         if !self.is_training {
-            return Err(Error::TrainingModeRequired);
+            return Err(Error::TrainingModeRequired("compute loss"));
         }
 
         if target.cols() != self.linear_state.w.cols() {
             return Err(Error::MismatchedDimensions {
-                context: "loss target columns",
+                reason: "loss target columns",
                 expected: self.linear_state.w.cols(),
                 found: target.cols(),
             });
@@ -786,6 +793,7 @@ impl<T: PrecisionType> DenseBlock<T> {
             return Err(Error::AllocationLimitExceeded {
                 received: target.rows(),
                 max: self.max_batch_size,
+                reason: "target batches"
             });
         }
 

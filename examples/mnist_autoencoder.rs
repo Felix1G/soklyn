@@ -4,12 +4,12 @@ use rand::prelude::SliceRandom;
 use rand::rng;
 use soklyn::ffn::FeedForwardNetwork;
 use soklyn::io::device::GpuContext;
-use soklyn::layers::DenseBlock;
-use soklyn::util::core::Tensor;
-use soklyn::util::functions::Activation::{Identity, Mish};
-use soklyn::util::functions::Normalisation::{BatchNorm, Disabled, LayerNorm};
-use soklyn::util::functions::Optimiser::Adam;
-use soklyn::util::functions::{Activation, InitFunc, InitXavierNormalFunc, LossFunc};
+use soklyn::mlp::DenseBlock;
+use soklyn::util::core::Tensor2D;
+use soklyn::util::function::Activation::{Identity, Mish};
+use soklyn::util::function::Normalisation::{BatchNorm, Disabled, LayerNorm};
+use soklyn::util::function::Optimiser::Adam;
+use soklyn::util::function::{Activation, InitFunc, InitXavierNormalFunc, LossFunc};
 use soklyn::util::log::{init_log, Error};
 use soklyn::util::scheduler::ExponentialLR;
 use std::collections::HashSet;
@@ -48,12 +48,12 @@ fn run_pipeline() -> Result<(), Error> {
     let mut rand = InitXavierNormalFunc::new::<f32>(108, 0.5);
 
     let mut layers = vec![
-        DenseBlock::default(&context, true, 784, 512, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 512, 256, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 256, 256, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 256, 256, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 256, 512, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 512, 784, BATCH_SIZE, &mut rand),
+        DenseBlock::default(&context, true, 784, 512, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 512, 256, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 256, 256, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 256, 256, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 256, 512, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 512, 784, BATCH_SIZE, &mut rand)?,
     ];
 
     configure_layers(&mut layers);
@@ -150,7 +150,7 @@ fn train(
                          lr, CLAMP, step)?;
         loss_ms += t1.elapsed().map_err(|_| Error::InvalidConfiguration { reason: "Clock fault encountered".to_string() })?.as_secs_f64() * 1000.0;
 
-        assert_no_nan(&outs[5].download(context).v, &format!("training batch {batch_idx}"));
+        assert_no_nan(&outs[5].download(context)?.v, &format!("training batch {batch_idx}"));
     }
 
     let avg = |ms: f64| ms / total_batches as f64;
@@ -171,7 +171,7 @@ fn test(mnist: &Mnist, network: &mut FeedForwardNetwork<f32>, context: &GpuConte
     for (batch_idx, batch_ids) in (0..TEST_ELEMENTS).collect::<Vec<_>>().chunks(BATCH_SIZE).enumerate() {
         let (input, labels) = build_batch(context, &mnist.tst_img, &mnist.tst_lbl, batch_ids, BATCH_SIZE, 784, 10)?;
         let outs = network.forward(context, &input, BATCH_SIZE, false, batch_idx)?;
-        let out_mat = outs[5].download(context);
+        let out_mat = outs[5].download(context)?;
 
         assert_no_nan(&out_mat.v, &format!("testing batch {batch_idx}"));
 
@@ -180,7 +180,7 @@ fn test(mnist: &Mnist, network: &mut FeedForwardNetwork<f32>, context: &GpuConte
                 .ok_or_else(|| Error::InvalidConfiguration { reason: "Invalid target classification matrix".to_string() })?;
 
             if unseen_classes.remove(&class) {
-                save_reconstruction(&out_mat.v, &input.download(context).v, class)?;
+                save_reconstruction(&out_mat.v, &input.download(context)?.v, class)?;
             }
         }
     }
@@ -222,7 +222,7 @@ fn build_batch(
     batch_size: usize,
     img_size: usize,
     label_size: usize,
-) -> Result<(Tensor<f32>, Vec<f32>), Error> {
+) -> Result<(Tensor2D<f32>, Vec<f32>), Error> {
     let mut pixels = Vec::with_capacity(ids.len() * img_size);
     let mut labels = Vec::with_capacity(ids.len() * label_size);
 
@@ -232,7 +232,7 @@ fn build_batch(
     }
 
     Ok((
-        Tensor::from_cpu_vector(context, &pixels, &[batch_size, img_size]),
+        Tensor2D::from_cpu_vector(context, &pixels, &[batch_size, img_size])?,
         labels,
     ))
 }

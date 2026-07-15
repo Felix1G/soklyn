@@ -1,23 +1,22 @@
 use cifar_ten::*;
-use half::f16;
-use soklyn::io::device::GpuContext;
-#[allow(unused_imports)]
-use soklyn::layers::DenseBlock;
-use soklyn::util::core::Tensor;
-use soklyn::util::functions::Activation::{Identity, Mish};
-use soklyn::util::functions::Normalisation::{BatchNorm, Disabled};
-use soklyn::util::functions::Optimiser::Adam;
-use soklyn::util::functions::Regularisation::L2Regular;
-use soklyn::util::functions::{Activation, InitHeNormalFunc, InitFunc, LossFunc};
-use soklyn::util::log::{init_log, Error};
-use soklyn::util::precision::PrecisionType;
-use soklyn::util::scheduler::CosineDecayLR;
-use rand::prelude::SliceRandom;
-use rand::rng;
 use std::fs;
 use std::process::exit;
 use std::time::SystemTime;
+use half::f16;
+use rand::prelude::SliceRandom;
+use rand::rng;
+use soklyn::{DenseBlock, InitFunc, InitHeNormalFunc};
+use soklyn::Activation::{Identity, Mish, Softmax};
+use soklyn::core::Tensor2D;
+use soklyn::io::device::GpuContext;
 use soklyn::io::save::SafetensorFile;
+use soklyn::log::{init_log, Error};
+use soklyn::LossFunc::CrossEntropyLoss;
+use soklyn::Normalisation::{BatchNorm, Disabled};
+use soklyn::Optimiser::Adam;
+use soklyn::Regularisation::L2Regular;
+use soklyn::scheduler::CosineDecayLR;
+use soklyn::PrecisionType;
 
 const EPOCHS: usize = 100;
 const BATCH_SIZE: usize = 200;
@@ -77,15 +76,15 @@ fn run_pipeline() -> Result<(), Error> {
     let mut rand = InitHeNormalFunc::new::<Precision>(108, 0.3);
 
     let mut layers: Vec<DenseBlock<Precision>> = vec![
-        DenseBlock::default(&context, true, IMG_SIZE, 1024, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 1024, 512, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 512, 256, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 256, 128, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 128, 10, BATCH_SIZE, &mut rand),
-        DenseBlock::default(&context, true, 128, 2, BATCH_SIZE, &mut rand)
+        DenseBlock::default(&context, true, IMG_SIZE, 1024, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 1024, 512, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 512, 256, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 256, 128, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 128, 10, BATCH_SIZE, &mut rand)?,
+        DenseBlock::default(&context, true, 128, 2, BATCH_SIZE, &mut rand)?
     ];
 
-    for layer in layers {
+    /*for layer in layers {
         layer.drop(&context)?;
     }
 
@@ -96,7 +95,7 @@ fn run_pipeline() -> Result<(), Error> {
 
     for layer in loaded_blocks {
         layers.push(layer);
-    }
+    }*/
     configure_layers(&mut layers);
 
     let steps_per_epoch = TRAIN_ELEMENTS as usize / BATCH_SIZE;
@@ -167,11 +166,11 @@ fn epoch(
 fn forward_all<'a>(
     layers: &'a Vec<DenseBlock<Precision>>,
     context: &GpuContext,
-    input: &'a Tensor<Precision>,
+    input: &'a Tensor2D<Precision>,
     batch_size: usize,
     is_training: bool,
     step: usize,
-) -> Result<[&'a Tensor<Precision>; 6], Error> {
+) -> Result<[&'a Tensor2D<Precision>; 6], Error> {
     let o0 = layers[0].forward(context, input, batch_size, is_training, step)?;
     let o1 = layers[1].forward(context, o0,    batch_size, is_training, step)?;
     let o2 = layers[2].forward(context, o1,    batch_size, is_training, step)?;
@@ -212,11 +211,11 @@ fn train(
 
         let t1 = SystemTime::now();
         if train_10_class {
-            layers[4].compute_loss(context, &target_10, LossFunc::CrossEntropyLoss, Activation::Softmax)?;
+            layers[4].compute_loss(context, &target_10, CrossEntropyLoss, Softmax)?;
             layers[4].backward_output(context, outs[3], BATCH_SIZE, &adam, &adam, lr, CLAMP, step)?;
             layers[3].backward_hidden(context, &layers[4], outs[2], BATCH_SIZE, &adam, &adam, lr, CLAMP, step)?;
         } else {
-            layers[5].compute_loss(context, &target_2, LossFunc::CrossEntropyLoss, Activation::Softmax)?;
+            layers[5].compute_loss(context, &target_2, CrossEntropyLoss, Softmax)?;
             layers[5].backward_output(context, outs[3], BATCH_SIZE, &adam, &adam, lr * 0.01, CLAMP, step)?; // apply your scaling factor safely here!
             layers[3].backward_hidden(context, &layers[5], outs[2], BATCH_SIZE, &adam, &adam, lr * 0.01, CLAMP, step)?;
         }
@@ -228,12 +227,12 @@ fn train(
         layers[0].backward_hidden(context, &layers[1], &input,   BATCH_SIZE, &adam, &adam, lr, CLAMP, step)?;
         back_ms += t2.elapsed().map_err(|_| Error::InvalidConfiguration { reason: "Clock went backwards".to_string() })?.as_secs_f64() * 1000.0;
 
-        let out_vec1 = outs[4].download(context).v;
-        let out_vec2 = outs[5].download(context).v;
+        let out_vec1 = outs[4].download(context)?.v;
+        let out_vec2 = outs[5].download(context)?.v;
             assert_no_nan(&out_vec1, &format!("training batch {batch_idx}"));
         assert_no_nan(&out_vec2, &format!("training batch {batch_idx}"));
-        success1 += count_correct(&out_vec1, &target_10.download(context).v, BATCH_SIZE, 10)?;
-        success2 += count_correct(&out_vec2, &target_2.download(context).v, BATCH_SIZE, 2)?;
+        success1 += count_correct(&out_vec1, &target_10.download(context)?.v, BATCH_SIZE, 10)?;
+        success2 += count_correct(&out_vec2, &target_2.download(context)?.v, BATCH_SIZE, 2)?;
     }
 
     let avg = |ms: f64| ms / total_batches as f64;
@@ -257,13 +256,13 @@ fn test(cifar: &CifarData, layers: &Vec<DenseBlock<Precision>>, context: &GpuCon
     for (batch_idx, batch_ids) in (0..TEST_ELEMENTS).collect::<Vec<_>>().chunks(BATCH_SIZE).enumerate() {
         let (input, labels1, labels2) = build_batch(context, &cifar.tst_img, &cifar.tst_lbl, batch_ids, BATCH_SIZE, IMG_SIZE, 10)?;
         let outs = forward_all(layers, context, &input, BATCH_SIZE, false, batch_idx)?;
-        let out_mat1 = outs[4].download(context);
-        let out_mat2 = outs[5].download(context);
+        let out_mat1 = outs[4].download(context)?;
+        let out_mat2 = outs[5].download(context)?;
 
         assert_no_nan(&out_mat1.v, &format!("testing batch {batch_idx}"));
         assert_no_nan(&out_mat2.v, &format!("testing batch {batch_idx}"));
-        success1 += count_correct(&out_mat1.v, &labels1.download(context).v, BATCH_SIZE, 10)?;
-        success2 += count_correct(&out_mat2.v, &labels2.download(context).v, BATCH_SIZE, 2)?;
+        success1 += count_correct(&out_mat1.v, &labels1.download(context)?.v, BATCH_SIZE, 10)?;
+        success2 += count_correct(&out_mat2.v, &labels2.download(context)?.v, BATCH_SIZE, 2)?;
     }
 
     Ok((success1 as f64 / TEST_ELEMENTS as f64 * 100.0, success2 as f64 / TEST_ELEMENTS as f64 * 100.0))
@@ -301,7 +300,7 @@ fn build_batch(
     batch_size: usize,
     img_size: usize,
     label_size: usize,
-) -> Result<(Tensor<Precision>, Tensor<Precision>, Tensor<Precision>), Error> {
+) -> Result<(Tensor2D<Precision>, Tensor2D<Precision>, Tensor2D<Precision>), Error> {
     let cifar_mean: [Precision; 3] = prec_arr![0.4914, 0.4822, 0.4465];
     let cifar_std:  [Precision; 3] = prec_arr![0.2470, 0.2435, 0.2616];
 
@@ -335,9 +334,9 @@ fn build_batch(
     }
 
     Ok((
-        Tensor::from_cpu_vector(context, &pixels, &[batch_size, img_size]),
-        Tensor::from_cpu_vector(context, &labels1, &[batch_size, label_size]),
-        Tensor::from_cpu_vector(context, &labels2, &[batch_size, 2]),
+        Tensor2D::from_cpu_vector(context, &pixels, &[batch_size, img_size])?,
+        Tensor2D::from_cpu_vector(context, &labels1, &[batch_size, label_size])?,
+        Tensor2D::from_cpu_vector(context, &labels2, &[batch_size, 2])?,
     ))
 }
 

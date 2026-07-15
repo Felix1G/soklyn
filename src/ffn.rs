@@ -1,11 +1,10 @@
 use crate::io::device::GpuContext;
-use crate::layers::DenseBlock;
-use crate::util::core::Tensor;
+use crate::mlp::DenseBlock;
+use crate::util::core::Tensor2D;
 use crate::util::log::Error;
-use crate::util::precision::PrecisionType;
-use std::path::Path;
+use crate::util::r#type::PrecisionType;
 use crate::getter;
-use crate::util::functions::{Activation, LossFunc, Optimiser};
+use crate::util::function::{Activation, LossFunc, Optimiser};
 
 pub struct FeedForwardNetwork<T: PrecisionType> {
     layers: Vec<DenseBlock<T>>,
@@ -32,18 +31,18 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
     /// * `input` - The input tensor for the first layer.
     /// * `batch_size` - The batch size for this pass.
     /// * `use_dropout` - If set to false, dropout is disabled.
-    /// * `step` - The current learning step.
+    /// * `step` - The current training iteration step.
     ///
     /// # Returns
     /// A reference to a vector of outputs from each layer in the network.
     pub fn forward<'a>(
         &'a self,
         context: &GpuContext,
-        input: &'a Tensor<T>,
+        input: &'a Tensor2D<T>,
         batch_size: usize,
         use_dropout: bool,
         step: usize,
-    ) -> Result<Vec<&'a Tensor<T>>, Error> {
+    ) -> Result<Vec<&'a Tensor2D<T>>, Error> {
         let mut outputs = Vec::with_capacity(self.layers.len());
         let mut current_input = input;
 
@@ -62,7 +61,7 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
     /// * `raw_pixels` - The input vector for the first layer. This vector will be converted into a tensor internally.
     /// * `batch_size` - The batch size for this pass.
     /// * `use_dropout` - If set to false, dropout is disabled.
-    /// * `step` - The current learning step.
+    /// * `step` - The current training iteration step.
     ///
     /// # Returns
     /// A **copy** of the output tensor from the very last layer.
@@ -73,9 +72,9 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
         batch_size: usize,
         use_dropout: bool,
         step: usize,
-    ) -> Result<Tensor<T>, Error> {
+    ) -> Result<Tensor2D<T>, Error> {
         let input_tensor =
-            Tensor::from_cpu_vector(context, raw_pixels, &[batch_size, self.inputs]);
+            Tensor2D::from_cpu_vector(context, raw_pixels, &[batch_size, self.inputs])?;
 
         let all_outputs = self.forward(context, &input_tensor, batch_size, use_dropout, step)?;
 
@@ -93,9 +92,9 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
     ///
     /// # Arguments
     /// * `context` - GPU Context. See [`GpuContext`].
-    /// * `target` - A [`Tensor<T>`] with size `(batch size, output features)` representing
+    /// * `target` - A [`Tensor2D<T>`] with size `(batch size, output features)` representing
     /// the current target batch.
-    /// * `input` - A [`Tensor<T>`] that contains the input to this layer during the forward pass.
+    /// * `input` - A [`Tensor2D<T>`] that contains the input to this layer during the forward pass.
     /// * `out_loss_func` - See [`LossFunc`] for the available error functions.
     /// * `out_act_mode` - See [`Activation`] for the available activation functions.
     /// * `batch_size` - Size of the batch.
@@ -103,16 +102,16 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
     /// * `norm_optimiser` - These [`Optimiser`] is used for normalisation weights and biases.
     /// * `learn_rate` - The learning rate of the network. Ideally, it should be between `0.0` exclusive and `1.0` inclusive.
     /// * `clamp` - Clamps gradient values between -`clamp` and +`clamp`. Pass [`f32::MAX`] to turn off clamping.
-    /// * `step` - The current learning step.
+    /// * `step` - The current training iteration step.
     ///
     /// # Returns
     /// A **copy** of the output tensor from the very last layer.
     pub fn backward(
         &self,
         context: &GpuContext,
-        outputs: &[&Tensor<T>],
-        target: &Tensor<T>,
-        input: &Tensor<T>,
+        outputs: &[&Tensor2D<T>],
+        target: &Tensor2D<T>,
+        input: &Tensor2D<T>,
         out_loss_func: LossFunc,
         out_act_mode: Activation,
         batch_size: usize,
@@ -180,7 +179,7 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
         Ok(())
     }
 
-    getter!(get_layers, layers, Vec<DenseBlock<T>>);
+    getter!(pub get_layers, layers, Vec<DenseBlock<T>>);
 
     /// Returns the total number of layers in the network.
     pub fn len(&self) -> usize {

@@ -1,5 +1,5 @@
 use crate::util::log::Error;
-use crate::util::precision::Precision;
+use crate::util::r#type::Precision;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -50,9 +50,9 @@ impl SafetensorWriter {
         self.metadata.insert(key, value);
     }
 
-    getter!(get_descriptors, descriptors, Vec<SafetensorDescriptor>);
-    getter!(get_metadata, metadata, IndexMap<String, String>);
-
+    getter!(pub get_descriptors, descriptors, Vec<SafetensorDescriptor>);
+    getter!(pub get_metadata, metadata, IndexMap<String, String>);
+    
     pub fn read<R: Read + Seek>(file: &mut R) -> Result<Self, Error> {
         // Read 8-byte little-endian header size prefix
         let mut header_size_bytes = [0u8; 8];

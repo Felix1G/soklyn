@@ -7,13 +7,13 @@ use crate::ffn::FeedForwardNetwork;
 use crate::getter;
 use crate::io::device::GpuContext;
 use crate::io::safetensor::{SafetensorWriter};
-use crate::layers::{DenseBlock, ParamState};
-use crate::util::core::{Matrix, Tensor};
-use crate::util::functions::Activation::Identity;
-use crate::util::functions::Normalisation::Disabled;
-use crate::util::functions::Regularisation;
+use crate::mlp::{DenseBlock, ParamState};
+use crate::util::core::{Matrix, Tensor2D};
+use crate::util::function::Activation::Identity;
+use crate::util::function::Normalisation::Disabled;
+use crate::util::function::Regularisation;
 use crate::util::log::Error;
-use crate::util::precision::{Precision, PrecisionType};
+use crate::util::r#type::{Precision, PrecisionType};
 
 pub struct SafetensorFile {
     writer: SafetensorWriter
@@ -88,7 +88,7 @@ impl SafetensorFile {
         self.writer.pass_metadata(key.as_ref().to_string(), value.to_string());
     }
 
-    getter!(get_metadata, writer.get_metadata(), IndexMap<String, String>);
+    getter!(pub get_metadata, writer.get_metadata(), IndexMap<String, String>);
 
     /// Processes a dense block layer and prepares its weights for saving.
     ///
@@ -118,15 +118,17 @@ impl SafetensorFile {
 
         // T-precision tensors
         let t_params: &[(&str, Vec<usize>, Vec<T>)] = &[
-            ("w", w_shape.clone(), weights.download(context).v),
-            ("b", b_shape.clone(), biases.download(context).v),
-            ("norm_w", nw_shape.clone(), norm_w.download(context).v),
-            ("norm_b", nb_shape.clone(), norm_b.download(context).v),
+            ("w", w_shape.clone(), weights.download(context)?.v),
+            ("b", b_shape.clone(), biases.download(context)?.v),
+            ("norm_w", nw_shape.clone(), norm_w.download(context)?.v),
+            ("norm_b", nb_shape.clone(), norm_b.download(context)?.v),
         ];
         for (suffix, shape, data) in t_params {
             let byte_data = bytemuck::try_cast_slice(data)
-                .map_err(|e| Error::SerializationCasting(format!("{e:?}")))?
-                .to_vec();
+                .map_err(|e| Error::SerializationCasting(
+                    format!("{e:?}"),
+                    "Unable to read tensor binary data")
+                )?.to_vec();
 
             self.writer.pass(
                 format!("layer{layer_num}.{suffix}"),
@@ -142,42 +144,42 @@ impl SafetensorFile {
                 (
                     format!("layer{layer_num}.dv_w"),
                     w_shape.clone(),
-                    layer.get_dv_weights().download(context).v,
+                    layer.get_dv_weights().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dv_b"),
                     b_shape.clone(),
-                    layer.get_dv_biases().download(context).v,
+                    layer.get_dv_biases().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dm_w"),
                     w_shape.clone(),
-                    layer.get_dm_weights().download(context).v,
+                    layer.get_dm_weights().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dm_b"),
                     b_shape.clone(),
-                    layer.get_dm_biases().download(context).v,
+                    layer.get_dm_biases().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dv_norm_w"),
                     nw_shape.clone(),
-                    layer.get_dv_norm_weights().download(context).v,
+                    layer.get_dv_norm_weights().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dv_norm_b"),
                     nb_shape.clone(),
-                    layer.get_dv_norm_biases().download(context).v,
+                    layer.get_dv_norm_biases().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dm_norm_w"),
                     nw_shape.clone(),
-                    layer.get_dm_norm_weights().download(context).v,
+                    layer.get_dm_norm_weights().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dm_norm_b"),
                     nb_shape.clone(),
-                    layer.get_dm_norm_biases().download(context).v,
+                    layer.get_dm_norm_biases().download(context)?.v,
                 ),
             ];
 
@@ -189,11 +191,11 @@ impl SafetensorFile {
                 ("master_norm_b", layer.get_master_norm_biases()),
             ] {
                 if let Some(tensor) = tensor_opt {
-                    let tensor: &Tensor<f32> = tensor;
+                    let tensor: &Tensor2D<f32> = tensor;
                     f32_params.push((
                         format!("layer{layer_num}.{suffix}"),
                         vec![tensor.rows(), tensor.cols()],
-                        tensor.download(context).v,
+                        tensor.download(context)?.v,
                     ));
                 }
             }
@@ -469,15 +471,16 @@ impl SafetensorFile {
         }
 
         // Helper closures
-        let from_t = |opt: &Option<Matrix<T>>, rows, cols| match opt {
-            Some(m) => Tensor::<T>::from_cpu_vector(context, &m.v, &[rows, cols]),
-            None => Tensor::<T>::zeros(context, &[rows, cols]),
-        };
+        let from_t = |opt: &Option<Matrix<T>>, rows, cols| 
+            Ok(match opt {
+                Some(m) => Tensor2D::<T>::from_cpu_vector(context, &m.v, &[rows, cols])?,
+                None => Tensor2D::<T>::zeros(context, &[rows, cols])?,
+            }) as Result<Tensor2D<T>, Error>;
 
-        let from_f32_opt = |opt: &Option<Matrix<f32>>, rows, cols| {
-            opt.as_ref()
-                .map(|m| Tensor::<f32>::from_cpu_vector(context, &m.v, &[rows, cols]))
-        };
+        let from_f32_opt = |opt: &Option<Matrix<f32>>, rows, cols|
+            opt.as_ref().map(|m| 
+                Tensor2D::<f32>::from_cpu_vector(context, &m.v, &[rows, cols])
+            ).transpose();
 
         (1..=max_layer)
             .map(|idx| {
@@ -493,31 +496,31 @@ impl SafetensorFile {
                     .as_ref()
                     .ok_or(Error::MissingBiases { layer: idx })?;
 
-                let (wr, wc) = (w.rows, w.cols);
-                let (br, bc) = (b.rows, b.cols);
+                let (wr, wc) = (w.rows(), w.cols());
+                let (br, bc) = (b.rows(), b.cols());
 
                 DenseBlock::<T>::from_tensors(
                     context,
                     is_training,
                     ParamState::from_tensors(
-                        Tensor::<T>::from_cpu_vector(context, &w.v, &[wr, wc]),
-                        Tensor::<T>::from_cpu_vector(context, &b.v, &[br, bc]),
-                        from_f32_opt(&layer.master_w, wr, wc),
-                        from_f32_opt(&layer.master_b, br, bc),
-                        from_f32_opt(&layer.dv_w, wr, wc),
-                        from_f32_opt(&layer.dv_b, br, bc),
-                        from_f32_opt(&layer.dm_w, wr, wc),
-                        from_f32_opt(&layer.dm_b, br, bc),
+                        Tensor2D::<T>::from_cpu_vector(context, &w.v, &[wr, wc])?,
+                        Tensor2D::<T>::from_cpu_vector(context, &b.v, &[br, bc])?,
+                        from_f32_opt(&layer.master_w, wr, wc)?,
+                        from_f32_opt(&layer.master_b, br, bc)?,
+                        from_f32_opt(&layer.dv_w, wr, wc)?,
+                        from_f32_opt(&layer.dv_b, br, bc)?,
+                        from_f32_opt(&layer.dm_w, wr, wc)?,
+                        from_f32_opt(&layer.dm_b, br, bc)?,
                     ),
                     ParamState::from_tensors(
-                        from_t(&layer.norm_w, br, wc),
-                        from_t(&layer.norm_b, br, bc),
-                        from_f32_opt(&layer.master_norm_w, br, wc),
-                        from_f32_opt(&layer.master_norm_b, br, bc),
-                        from_f32_opt(&layer.dv_norm_w, br, wc),
-                        from_f32_opt(&layer.dv_norm_b, br, bc),
-                        from_f32_opt(&layer.dm_norm_w, br, wc),
-                        from_f32_opt(&layer.dm_norm_b, br, bc),
+                        from_t(&layer.norm_w, br, wc)?,
+                        from_t(&layer.norm_b, br, bc)?,
+                        from_f32_opt(&layer.master_norm_w, br, wc)?,
+                        from_f32_opt(&layer.master_norm_b, br, bc)?,
+                        from_f32_opt(&layer.dv_norm_w, br, wc)?,
+                        from_f32_opt(&layer.dv_norm_b, br, bc)?,
+                        from_f32_opt(&layer.dm_norm_w, br, wc)?,
+                        from_f32_opt(&layer.dm_norm_b, br, bc)?,
                     ),
                     Disabled,
                     Identity,

@@ -2,7 +2,7 @@ use std::io;
 use cudarc::driver::DriverError;
 use tempfile::PersistError;
 use thiserror::Error;
-use crate::util::precision::Precision;
+use crate::util::r#type::Precision;
 
 /// Activate logging which includes debug info and detailed errors.
 ///
@@ -25,15 +25,22 @@ pub enum Error {
     #[error("Temp file writing error: {0}")]
     PersistError(#[from] PersistError),
 
+    #[error("Index out of bounds for {reason}: {idx} for length {max_idx}.")]
+    IndexOutOfBounds {
+        idx: usize,
+        max_idx: usize,
+        reason: &'static str
+    },
+
     #[error("Hardware acceleration constraint violation: Precision is {precision:?}, which requires a tile dimension of {expected}, but found {found}. (WMMA requirement)")]
     HardwareConstraintViolation {
         precision: Precision,
         expected: usize,
-        found: u32,
+        found: u32
     },
 
-    #[error("Memory alignment or size mismatch during serialization: {0}")]
-    SerializationCasting(String),
+    #[error("Memory alignment or size mismatch during serialization: {1}: {0}.")]
+    SerializationCasting(String, &'static str),
 
     #[error("Layer {layer}: '{param}' must be FP32 but safetensor file contains FP16.")]
     PrecisionMatch {
@@ -49,23 +56,23 @@ pub enum Error {
 
     #[error("Layer {layer} is completely missing from the safetensor file.")]
     MissingLayer {
-        layer: usize,
+        layer: usize
     },
 
     #[error("Weights for layer {layer} is completely missing from the safetensor file.")]
     MissingWeights {
-        layer: usize,
+        layer: usize
     },
 
     #[error("Biases for layer {layer} is completely missing from the safetensor file.")]
     MissingBiases {
-        layer: usize,
+        layer: usize
     },
 
     #[error("Tensor '{key}' has unrecognised dtype '{dtype}'.")]
     UnrecognizedTensorKey {
         key: String,
-        dtype: String,
+        dtype: String
     },
 
     #[error("Invalid tensor name format '{name}': {reason}.")]
@@ -74,17 +81,17 @@ pub enum Error {
     #[error("Invalid network configuration: {reason}")]
     InvalidConfiguration { reason: String },
 
-    #[error("Invalid operation: Action requires the network to be in training mode.")]
-    TrainingModeRequired,
+    #[error("Invalid operation for {0}: Action requires the network to be in training mode.")]
+    TrainingModeRequired(&'static str),
 
-    #[error("Batch size limit exceeded: items received ({received}) exceeds maximum allowed allocation ({max}).")]
-    AllocationLimitExceeded { received: usize, max: usize },
+    #[error("Allocation limit exceeded for {reason}: items received ({received}) exceeds maximum allowed allocation ({max}).")]
+    AllocationLimitExceeded { received: usize, max: usize, reason: &'static str },
 
-    #[error("Dimension mismatch for {context}: expected {expected}, found {found}.")]
+    #[error("Dimension mismatch for {reason}: expected {expected}, found {found}.")]
     MismatchedDimensions {
-        context: &'static str,
+        reason: &'static str,
         expected: usize,
-        found: usize
+        found: usize,
     },
 
     #[error("Batch size constraint violation: {reason}")]

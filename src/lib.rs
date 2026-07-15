@@ -6,41 +6,56 @@ pub mod io {
 
 pub mod util {
     pub mod scheduler;
-    pub mod precision;
+    pub mod r#type;
     pub mod core;
-    pub mod functions;
+    pub mod function;
     pub mod log;
 }
 
-pub mod layers;
+pub mod mlp;
 pub mod ffn;
+pub mod conv;
+
+pub use mlp::*;
+pub use ffn::*;
+pub use conv::*;
+pub use util::*;
+pub use util::r#type::*;
+pub use util::function::*;
 
 #[cfg(test)]
 mod tests {
+    use std::process::exit;
+    use std::time::SystemTime;
+    use crate::{ConvBlock, KernelConfig};
+    use crate::core::Tensor4D;
     use crate::ffn::FeedForwardNetwork;
     use crate::io::device::GpuContext;
-    use crate::layers::DenseBlock;
-    use crate::util::core::Tensor;
-    use crate::util::functions::{Activation, InitFunc, InitHeUniformFunc, LossFunc, Normalisation, Regularisation};
-    use crate::util::functions::Optimiser::SGD;
+    use crate::mlp::DenseBlock;
+    use crate::util::core::Tensor2D;
+    use crate::util::function::{Activation, InitFunc, InitHeUniformFunc, LossFunc, Normalisation, Regularisation};
+    use crate::util::function::Optimiser::SGD;
     use crate::util::log::Error;
 
     const BATCH_SIZE: usize = 64;
 
-    fn gen_input(context: &GpuContext) -> Tensor<f32> {
-        Tensor::zeros(&context, &[64, 32])
+    fn gen_input(context: &GpuContext) -> Tensor2D<f32> {
+        Tensor2D::zeros(&context, &[64, 32]).unwrap()
     }
 
-    fn gen_target(context: &GpuContext) -> Tensor<f32> {
-        Tensor::zeros(&context, &[64, 4])
+    fn gen_target(context: &GpuContext) -> Tensor2D<f32> {
+        Tensor2D::zeros(&context, &[64, 4]).unwrap()
     }
 
     #[test]
     fn it_works() {
-        example().unwrap();
+        if let Err(err) = example1() {
+            eprintln!("\n[!] Execution Error: {err}");
+            exit(1);
+        }
     }
 
-    fn example() -> Result<(), Error> {
+    fn example1() -> Result<(), Error> {
         // 1. Create the GPU context
         let context = GpuContext::new(16); // CUDA tile dimension of 16
 
@@ -53,11 +68,11 @@ mod tests {
         // The activation of the last layer (the output layer) must be set to Identity
         let layers: Vec<DenseBlock<f32>> = vec![
             DenseBlock::new(&context, true, 32, 16, BATCH_SIZE, &mut init,
-                            Normalisation::Disabled, Activation::LeakyReLU(0.01), Regularisation::None, 0.1),
+                            Normalisation::Disabled, Activation::LeakyReLU(0.01), Regularisation::None, 0.1)?,
             DenseBlock::new(&context, true, 16, 8, BATCH_SIZE, &mut init,
-                            Normalisation::Disabled, Activation::LeakyReLU(0.01), Regularisation::None, 0.1),
+                            Normalisation::Disabled, Activation::LeakyReLU(0.01), Regularisation::None, 0.1)?,
             DenseBlock::new(&context, true, 8, 4, BATCH_SIZE, &mut init,
-                            Normalisation::Disabled, Activation::Identity, Regularisation::None, 0.1),
+                            Normalisation::Disabled, Activation::Identity, Regularisation::None, 0.1)?,
         ];
 
         // 4. Wrap the layers inside the Feed Forward Network to simplify the process.

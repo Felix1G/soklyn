@@ -1,7 +1,7 @@
 #pragma once
 
-#ifndef FORWARD_WMMA_CU
-#define FORWARD_WMMA_CU
+#ifndef FFN_FORWARD_WMMA_CU
+#define FFN_FORWARD_WMMA_CU
 
 #include "../math.cu"
 #include <mma.h>

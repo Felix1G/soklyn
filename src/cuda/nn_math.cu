@@ -7,6 +7,7 @@
 #include "kernel/ffn/backward_wmma.cu"
 #include "kernel/ffn/forward.cu"
 #include "kernel/ffn/forward_wmma.cu"
+#include "kernel/conv/forward.cu"
 
 extern "C" {
 
@@ -69,16 +70,16 @@ __global__ void forward_pass_0_f16(
 }
 
 __global__ void forward_pass_1_f32(
-    f32_t* preact_out, f32_t* centered_out,
-    const f32_t* prenorm_out, const f32_t* norm_w, const f32_t* norm_b, f32_t* norm_rstd,
+    f32_t* preact_out, f32_t* centered_out, const f32_t* prenorm_out,
+    const f32_t* norm_w, const f32_t* norm_b, f32_t* norm_rstd,
     const uint32_t m, const uint32_t wc, const uint32_t norm
 ) {
     forward_pass_1_kernel<f32_t>(preact_out, centered_out, prenorm_out, norm_w, norm_b, norm_rstd, m, wc, norm);
 }
 
 __global__ void forward_pass_1_f16(
-    f16_t* preact_out, f16_t* centered_out,
-    const f16_t* prenorm_out, const f16_t* norm_w, const f16_t* norm_b, f16_t* norm_rstd,
+    f16_t* preact_out, f16_t* centered_out, const f16_t* prenorm_out,
+    const f16_t* norm_w, const f16_t* norm_b, f16_t* norm_rstd,
     const uint32_t m, const uint32_t wc, const uint32_t norm
 ) {
     forward_pass_1_kernel<f16_t>(preact_out, centered_out, prenorm_out, norm_w, norm_b, norm_rstd, m, wc, norm);
@@ -208,6 +209,50 @@ __global__ void backward_pass_f16(
         linear_beta1, linear_beta2, linear_epsilon, linear_nesterov,
         norm_beta1, norm_beta2, norm_epsilon, norm_nesterov,
         regularisation, regu_coeff, step
+    );
+}
+
+__global__ void conv_forward_pass_0_kernel_f32(
+    f32_t* prenorm_features, const f32_t* in, const f32_t* w, const f32_t* b,
+    const uint32_t use_bias, const uint32_t pad_mode, const uint32_t ic, const uint32_t oc,
+    const uint32_t iw, const uint32_t ih, const uint32_t ow, const uint32_t oh, const uint32_t fw, const uint32_t fh,
+    const uint32_t pad, const uint32_t stride_x, const uint32_t stride_y, const uint32_t dil_x, const uint32_t dil_y
+) {
+    conv_forward_pass_0_kernel<f32_t>(
+        prenorm_features, in, w, b, use_bias, pad_mode, ic, oc, iw, ih, ow, oh, fw, fh,
+        pad, stride_x, stride_y, dil_x, dil_y
+    );
+}
+
+__global__ void conv_forward_pass_0_kernel_f16(
+    f16_t* prenorm_features, const f16_t* in, const f16_t* w, const f16_t* b,
+    const uint32_t use_bias, const uint32_t pad_mode, const uint32_t ic, const uint32_t oc,
+    const uint32_t iw, const uint32_t ih, const uint32_t ow, const uint32_t oh, const uint32_t fw, const uint32_t fh,
+    const uint32_t pad, const uint32_t stride_x, const uint32_t stride_y, const uint32_t dil_x, const uint32_t dil_y
+) {
+    conv_forward_pass_0_kernel<f16_t>(
+        prenorm_features, in, w, b, use_bias, pad_mode, ic, oc, iw, ih, ow, oh, fw, fh,
+        pad, stride_x, stride_y, dil_x, dil_y
+    );
+}
+
+__global__ void conv_forward_pass_1_kernel_f32(
+    f32_t* __restrict__ preact_features, f32_t* __restrict__ centered_features, const f32_t* __restrict__ prenorm_features,
+    const f32_t* __restrict__ norm_w, const f32_t* __restrict__ norm_b, f32_t* __restrict__ norm_rstd,
+    const uint32_t ow, const uint32_t oh, const uint32_t oc, const uint32_t on, const uint32_t norm
+) {
+    conv_forward_pass_1_kernel<f32_t>(
+        preact_features, centered_features, prenorm_features, norm_w, norm_b, norm_rstd, ow, oh, oc, on, norm
+    );
+}
+
+__global__ void conv_forward_pass_1_kernel_f16(
+    f16_t* __restrict__ preact_features, f16_t* __restrict__ centered_features, const f16_t* __restrict__ prenorm_features,
+    const f16_t* __restrict__ norm_w, const f16_t* __restrict__ norm_b, f16_t* __restrict__ norm_rstd,
+    const uint32_t ow, const uint32_t oh, const uint32_t oc, const uint32_t on, const uint32_t norm
+) {
+    conv_forward_pass_1_kernel<f16_t>(
+        preact_features, centered_features, prenorm_features, norm_w, norm_b, norm_rstd, ow, oh, oc, on, norm
     );
 }
 

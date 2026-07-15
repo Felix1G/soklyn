@@ -1,19 +1,10 @@
 #pragma once
 
-#ifndef FORWARD_CU
-#define FORWARD_CU
+#ifndef FFN_FORWARD_CU
+#define FFN_FORWARD_CU
 
 #include "../util.cu"
 #include "../math.cu"
-
-__device__ inline void dev_block_stride_sum(const uint32_t tid, f32_t* shared_sum) {
-    __syncthreads(); // ensure shared_sum has been fully written
-    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (tid < stride)
-            shared_sum[tid] += shared_sum[tid + stride];
-        __syncthreads();
-    }
-}
 
 /**
  * The first part of the forward pass. This function handles the linear calculations (wx + b).
@@ -33,7 +24,7 @@ __device__ inline void dev_block_stride_sum(const uint32_t tid, f32_t* shared_su
  */
 // threadIdx.x corresponds to wc (features), threadIdx.y corresponds to m (batch size)
 template<typename T> __device__ inline void forward_pass_0_kernel(
-    T* prenorm_out, const T* in, const T* w, const T* b,
+    T* __restrict__ prenorm_out, const T* __restrict__ in, const T* __restrict__ w, const T* __restrict__ b,
     const uint32_t use_bias, const uint32_t m, const uint32_t n, const uint32_t wc,
     const uint32_t tile_dim
 ) {
@@ -74,8 +65,8 @@ template<typename T> __device__ inline void forward_pass_0_kernel(
  */
 // Each block owns one entire row (norm != BatchNorm) or column (norm == BatchNorm)
 template<typename T> __device__ inline void forward_pass_1_kernel(
-    T* preact_out, T* centered_out,
-    const T* prenorm_out, const T* norm_w, const T* norm_b, T* norm_rstd,
+    T* __restrict__ preact_out, T* __restrict__ centered_out, const T* __restrict__ prenorm_out,
+    const T* __restrict__ norm_w, const T* __restrict__ norm_b, T* __restrict__ norm_rstd,
     const uint32_t m, const uint32_t wc, const uint32_t norm
 ) {
     extern __shared__ f32_t shared_sum[];
@@ -96,7 +87,7 @@ template<typename T> __device__ inline void forward_pass_1_kernel(
 
         // Reduce sums to index 0
         shared_sum[tid] = sq_sum;
-        dev_block_stride_sum(tid, shared_sum);
+        dev_block_stride_sum_1d(shared_sum);
 
         // Finish calculation
         __syncthreads();
@@ -104,9 +95,12 @@ template<typename T> __device__ inline void forward_pass_1_kernel(
         const f32_t rstd_f32        = CudaMath<f32_t>::rsqrt(rms_variance);
         const T rstd                = static_cast<T>(rstd_f32);
 
+        if (tid == 0) {
+            norm_rstd[bid] = rstd;
+        }
+
         for (uint32_t col = tid; col < wc; col += blockDim.x) {
             const uint32_t idx  = row * wc + col;
-            norm_rstd[idx]      = rstd;
             centered_out[idx]   = prenorm_out[idx];
             preact_out[idx]     = prenorm_out[idx] * rstd * norm_w[col];
         }
@@ -124,7 +118,7 @@ template<typename T> __device__ inline void forward_pass_1_kernel(
         }
 
         shared_sum[tid] = total_sum;
-        dev_block_stride_sum(tid, shared_sum);
+        dev_block_stride_sum_1d(shared_sum);
 
         __syncthreads();
         const f32_t mean = shared_sum[0] / static_cast<f32_t>(n);
@@ -141,7 +135,7 @@ template<typename T> __device__ inline void forward_pass_1_kernel(
         }
 
         shared_sum[tid] = std_sum;
-        dev_block_stride_sum(tid, shared_sum);
+        dev_block_stride_sum_1d(shared_sum);
 
         // ------------- FINISH CALCULATIONS -------------
         __syncthreads();
@@ -149,11 +143,14 @@ template<typename T> __device__ inline void forward_pass_1_kernel(
         const f32_t rstd_f32    = CudaMath<f32_t>::rsqrt(variance);
         const T rstd            = static_cast<T>(rstd_f32);
 
+        if (tid == 0) {
+            norm_rstd[bid] = rstd;
+        }
+
         for (uint32_t i = tid; i < n; i += stride) {
             const uint32_t idx  = norm == 2 ? bid * wc + i : i * wc + bid;
             const uint32_t col  = norm == 2 ? i : bid;
             const f32_t val_f32 = static_cast<f32_t>(prenorm_out[idx]) - mean;
-            norm_rstd[idx]      = rstd;
             centered_out[idx]   = static_cast<T>(val_f32);
             preact_out[idx]     = static_cast<T>(val_f32 * rstd_f32 * static_cast<f32_t>(norm_w[col]) + static_cast<f32_t>(norm_b[col]));
         }
@@ -179,7 +176,7 @@ template<typename T> __device__ inline void forward_pass_1_kernel(
  */
 // threadIdx.x corresponds to wc (features), threadIdx.y corresponds to m (batch size)
 template<typename T> __device__ inline void forward_pass_2_kernel(
-    T* out, T* predrop_out, const T* preact_out, T* mask,
+    T* __restrict__ out, T* __restrict__ predrop_out, const T* __restrict__ preact_out, T* __restrict__ mask,
     const uint32_t m, const uint32_t n, const uint32_t act,
     const f32_t leaky_relu_coeff, const uint32_t use_dropout, const f32_t mask_coeff, const uint32_t seed
 ) {

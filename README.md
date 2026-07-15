@@ -94,11 +94,11 @@ let mut init = InitHeUniformFunc::new::<f32>(10, 0.1);
 // The activation of the last layer (the output layer) must be set to Identity
 let layers: Vec<DenseBlock<f32>> = vec![
     DenseBlock::new(&context, true, 32, 16, BATCH_SIZE, &mut init,
-                    Normalisation::Disabled, Activation::LeakyReLU(0.01), Regularisation::None, 0.1),
+                    Normalisation::Disabled, Activation::LeakyReLU(0.01), Regularisation::None, 0.1)?,
     DenseBlock::new(&context, true, 16, 8, BATCH_SIZE, &mut init,
-                    Normalisation::Disabled, Activation::LeakyReLU(0.01), Regularisation::None, 0.1),
+                    Normalisation::Disabled, Activation::LeakyReLU(0.01), Regularisation::None, 0.1)?,
     DenseBlock::new(&context, true, 8, 4, BATCH_SIZE, &mut init,
-                    Normalisation::Disabled, Activation::Identity, Regularisation::None, 0.1),
+                    Normalisation::Disabled, Activation::Identity, Regularisation::None, 0.1)?,
 ];
 
 // 4. Wrap the layers inside the Feed Forward Network to simplify the process.

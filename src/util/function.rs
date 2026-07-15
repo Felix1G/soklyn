@@ -1,7 +1,9 @@
 use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::{RngCore, SeedableRng};
-use crate::util::functions::Optimiser::{Adam, SGD};
-use crate::util::precision::PrecisionType;
+use crate::{getter, getter_copy};
+use crate::log::Error;
+use crate::util::function::Optimiser::{Adam, SGD};
+use crate::util::r#type::PrecisionType;
 
 /// Regularisation is applied right before the optimiser.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -30,9 +32,9 @@ impl Regularisation {
     /// IMPORTANT: 0 is for NO regularisation.
     pub(crate) fn ordinal(&self) -> usize {
         match self {
-            Regularisation::None => 0,
-            Regularisation::L1Regular(_) => 1,
-            Regularisation::L2Regular(_) => 2,
+            Self::None => 0,
+            Self::L1Regular(_) => 1,
+            Self::L2Regular(_) => 2,
         }
     }
 }
@@ -62,10 +64,10 @@ impl Normalisation {
     /// IMPORTANT: 0 is for NO normalisation.
     pub(crate) fn ordinal(&self) -> usize {
         match self {
-            Normalisation::Disabled => 0,
-            Normalisation::RMSNorm => 1,
-            Normalisation::LayerNorm => 2,
-            Normalisation::BatchNorm => 3
+            Self::Disabled => 0,
+            Self::RMSNorm => 1,
+            Self::LayerNorm => 2,
+            Self::BatchNorm => 3
         }
     }
 }
@@ -137,14 +139,14 @@ pub enum Activation {
 impl Activation {
     pub fn ordinal(&self) -> usize {
         match self {
-            Activation::Identity => 0,
-            Activation::Sigmoid => 1,
-            Activation::ReLU => 2,
-            Activation::LeakyReLU(_) => 3,
-            Activation::Tanh => 4,
-            Activation::Softmax => 5,
-            Activation::SiLU => 6,
-            Activation::Mish => 7
+            Self::Identity => 0,
+            Self::Sigmoid => 1,
+            Self::ReLU => 2,
+            Self::LeakyReLU(_) => 3,
+            Self::Tanh => 4,
+            Self::Softmax => 5,
+            Self::SiLU => 6,
+            Self::Mish => 7
         }
     }
 }
@@ -174,7 +176,7 @@ pub enum LossFunc {
 /// * [`InitZeroFunc`] - Initialises to `0.0`.
 pub trait InitFunc {
     fn new<T: PrecisionType>(seed: u64, mul: f32) -> Self;
-    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T>;
+    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize, len: usize) -> Vec<T>;
 }
 
 pub struct InitXavierUniformFunc {
@@ -228,10 +230,9 @@ impl InitFunc for InitXavierUniformFunc {
         }
     }
 
-    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T> {
-        let total = fan_in * fan_out;
+    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize, len: usize) -> Vec<T> {
         let limit = (6.0 / (fan_in + fan_out) as f32).sqrt();
-        uniform_dist(total, &mut self.rng, self.factor, limit)
+        uniform_dist(len, &mut self.rng, self.factor, limit)
     }
 }
 
@@ -243,10 +244,9 @@ impl InitFunc for InitXavierNormalFunc {
         }
     }
 
-    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T> {
-        let total = fan_in * fan_out;
+    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize, len: usize) -> Vec<T> {
         let std = (2.0 / (fan_in + fan_out) as f32).sqrt();
-        normal_dist(total, &mut self.rng, self.factor, std)
+        normal_dist(len, &mut self.rng, self.factor, std)
     }
 }
 impl InitFunc for InitHeUniformFunc {
@@ -257,10 +257,9 @@ impl InitFunc for InitHeUniformFunc {
         }
     }
 
-    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T> {
-        let total = fan_in * fan_out;
+    fn init<T: PrecisionType>(&mut self, fan_in: usize, _: usize, len: usize) -> Vec<T> {
         let limit = (6.0 / fan_in as f32).sqrt();
-        uniform_dist(total, &mut self.rng, self.factor, limit)
+        uniform_dist(len, &mut self.rng, self.factor, limit)
     }
 }
 
@@ -272,10 +271,9 @@ impl InitFunc for InitHeNormalFunc {
         }
     }
 
-    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T> {
-        let total = fan_in * fan_out;
+    fn init<T: PrecisionType>(&mut self, fan_in: usize, _: usize, len: usize) -> Vec<T> {
         let std = (2.0 / fan_in as f32).sqrt();
-        normal_dist(total, &mut self.rng, self.factor, std)
+        normal_dist(len, &mut self.rng, self.factor, std)
     }
 }
 
@@ -285,7 +283,178 @@ impl InitFunc for InitZeroFunc {
         Self {}
     }
 
-    fn init<T: PrecisionType>(&mut self, fan_in: usize, fan_out: usize) -> Vec<T> {
-        vec![T::zero(); fan_in * fan_out]
+    fn init<T: PrecisionType>(&mut self, _: usize, _: usize, len: usize) -> Vec<T> {
+        vec![T::zero(); len]
+    }
+}
+
+pub enum PaddingType {
+    /// Padding is filled with `0`s.
+    ///
+    /// `0 0 | A B C | 0 0`
+    ZeroPadding,
+    /// Padding pixels are a mirror image of the pixels inside the edge.
+    ///
+    /// `C B | A B C | B A`
+    ReflectivePadding,
+    /// Takes the very last pixel on the edge and repeats it outwards indefinitely.
+    ///
+    /// `A A | A B C | C C`
+    ReplicatePadding,
+}
+
+impl PaddingType {
+    pub(crate) fn ordinal(&self) -> usize {
+        match self {
+            Self::ZeroPadding => 0,
+            Self::ReflectivePadding => 1,
+            Self::ReplicatePadding => 2,
+        }
+    }
+}
+
+pub struct KernelConfig {
+    dimension: (usize, usize),
+    pad: usize,
+    auto_pad: bool,
+    pad_type: PaddingType,
+    stride: (usize, usize),
+    dilation: (usize, usize),
+}
+
+impl KernelConfig {
+    /// Creates a manual padding configuration where an explicit number of zero-filled rows
+    /// and columns are symmetrically appended to all outer boundaries of the input tensor.
+    ///
+    /// # Arguments
+    /// * `dimension` - Spatial width (`dimension.0`) and height (`dimension.1`) of each kernel.
+    /// * `pad` - The number of padding layers to apply symmetrically along both spatial dimensions (width and height).
+    /// * `pad_type` - The type of padding to use. See [`PaddingType`].
+    /// * `stride` - Discrete step increment for the sliding window.
+    /// `stride.0` represents the x-axis (width) while `stride.1` represents the y-axis (height).
+    /// * `dilation` - The spacing between kernel elements, inserting `dilation - 1` spaces in between.
+    pub fn new(dimension: (usize, usize), pad: usize, pad_type: PaddingType,
+               stride: (usize, usize), dilation: (usize, usize)) -> Result<Self, Error> {
+        if dimension.0 == 0 {
+            return Err(Error::InvalidConfiguration {
+                reason: String::from("Kernel width cannot be 0."),
+            });
+        }
+
+        if dimension.1 == 0 {
+            return Err(Error::InvalidConfiguration {
+                reason: String::from("Kernel height cannot be 0."),
+            });
+        }
+
+        if stride.0 == 0 || stride.1 == 0 {
+            return Err(Error::InvalidConfiguration {
+                reason: String::from("Kernel stride cannot be 0."),
+            });
+        }
+
+        if stride.0 > dimension.0 {
+            log::warn!("Kernel stride is more than the width. Some data will be ignored!");
+        }
+
+        if stride.1 > dimension.1 {
+            log::warn!("Kernel stride is more than the height. Some data will be ignored!");
+        }
+
+        if dilation.0 == 0 || dilation.1 == 0 {
+            return Err(Error::InvalidConfiguration {
+                reason: String::from("Kernel dilation cannot be 0."),
+            });
+        }
+
+        Ok(Self {
+            dimension,
+            pad,
+            auto_pad: false,
+            pad_type,
+            stride,
+            dilation
+        })
+    }
+
+    /// Creates an automatic padding configuration that dynamically computes the required
+    /// padding size at execution time, ensuring that the filter covers all spatial boundary
+    /// elements and the output dimensions are ceiling-divided by the stride value.
+    pub fn auto_pad(dimension: (usize, usize), pad_type: PaddingType,
+                    stride: (usize, usize), dilation: (usize, usize)) -> Result<Self, Error> {
+        Self::new(dimension, 0, pad_type, stride, dilation)
+    }
+
+    getter!(pub get_dimension, dimension, (usize, usize));
+    getter_copy!(pub get_pad, pad, usize);
+    getter!(pub get_pad_type, pad_type, PaddingType);
+    getter!(pub get_stride, stride, (usize, usize));
+    getter!(pub get_dilation, dilation, (usize, usize));
+
+    pub(crate) fn auto_pad_val(
+        &self,
+        dim: &(usize, usize),
+    ) -> (usize, usize) {
+        if self.auto_pad {
+            let out = self.elements_from_length(dim);
+            let needed_w = (out.0 - 1) * self.stride.0 + self.dimension.0;
+            let pad_w = if needed_w > dim.0 {
+                needed_w - dim.0
+            } else {
+                0
+            };
+
+            let needed_h = (out.1 - 1) * self.stride.1 + self.dimension.1;
+            let pad_h = if needed_h > dim.1 {
+                needed_h - dim.1
+            } else {
+                0
+            };
+
+            (pad_w, pad_h)
+        } else {
+            (0, 0)
+        }
+    }
+
+    #[inline]
+    pub(crate) fn actual_width(&self) -> usize {
+        (self.dimension.0 - 1) * self.dilation.0 + 1
+    }
+
+    #[inline]
+    pub(crate) fn actual_height(&self) -> usize {
+        (self.dimension.1 - 1) * self.dilation.1 + 1
+    }
+
+    /// # Arguments
+    /// * `len` - The dimension of the input (spatial width, spatial height).
+    pub(crate) fn elements_from_length(&self, len: &(usize, usize)) -> (usize, usize) {
+        if self.auto_pad {
+            (
+                (len.0 + self.stride.0 - 1) / self.stride.0,
+                (len.1 + self.stride.1 - 1) / self.stride.1
+            )
+        } else {
+            let padded_len_x = len.0 + 2 * self.pad;
+            let padded_len_y = len.1 + 2 * self.pad;
+
+            let size_x = self.actual_width();
+            let size_y = self.actual_height();
+
+            let elems_x = if padded_len_x < size_x {
+                0
+            } else {
+                ((padded_len_x - size_x) / self.stride.0) + 1
+            };
+
+            let elems_y = if padded_len_y < size_y {
+                0
+            } else {
+                ((padded_len_y - size_y) / self.stride.1) + 1
+            };
+
+            (elems_x, elems_y)
+        }
     }
 }
