@@ -1,13 +1,17 @@
-use cudarc::driver::{LaunchConfig, PushKernelArg};
-use crate::io::device::GpuContext;
-use crate::{Activation, ConvBlock, Normalisation, Precision, PrecisionType};
 use crate::core::{scramble_seed, Tensor4D};
+use crate::io::device::GpuContext;
 use crate::log::Error;
+use crate::{Activation, ConvBlock, Normalisation, Precision, PrecisionType};
+use cudarc::driver::{LaunchConfig, PushKernelArg};
 
 impl GpuContext {
     pub(crate) fn gpu_conv_forward_pass<T: PrecisionType>(
-        &self, cur_layer: &ConvBlock<T>, input: &Tensor4D<T>, batch_size: usize,
-        use_dropout: bool, step: usize
+        &self,
+        cur_layer: &ConvBlock<T>,
+        input: &Tensor4D<T>,
+        batch_size: usize,
+        use_dropout: bool,
+        step: usize,
     ) -> Result<(), Error> {
         let f_cfg = cur_layer.get_filter_cfg();
         let f_stride = f_cfg.get_stride();
@@ -84,7 +88,7 @@ impl GpuContext {
             oc_u32 as usize,
             oh_u32 as usize,
             ow_u32 as usize,
-            tile_w * tile_h * size_of::<T>() as u32
+            tile_w * tile_h * size_of::<T>() as u32,
         );
 
         unsafe {
@@ -114,13 +118,12 @@ impl GpuContext {
                 .arg(&batch_size)
                 .arg(&norm_mode_u32);
 
-
             let grid_x = if *norm == Normalisation::BatchNorm {
-                0 //TODO
+                oc_u32 as usize
             } else {
                 batch_size
             };
-            
+
             let cfg = LaunchConfig {
                 grid_dim: (grid_x as u32, 1, 1),
                 block_dim: (self.tile_dim_2, 1, 1),

@@ -458,3 +458,16 @@ impl KernelConfig {
         }
     }
 }
+
+/// The type of pooling supported for the Convolutional Neural Network.
+pub enum PoolingType {
+    /// Takes the maximum value from a pooling window.
+    MaxPooling,
+    /// Sums all values from the pooling window.
+    SumPooling,
+    /// Takes the average of all values from the pooling window.
+    ///
+    /// This is usually implemented with a single pooling kernel that spans the entire output spatial image.
+    /// For this type of implementation, it functions as `Global Average Pooling`.
+    AveragePooling,
+}

@@ -39,8 +39,9 @@
  * @param dil_y The dilation in the vertical axis.
  */
 // threadIdx.x corresponds to output width, threadIdx.y corresponds to output height, threadIdx.z corresponds to batch size * output column
-template<typename T> __device__ inline void conv_forward_pass_0_kernel(
-    T* __restrict__ prenorm_features, const T* __restrict__ in, const T* __restrict__ w, const T* __restrict__ b,
+template<typename T>
+__device__ inline void conv_forward_pass_0_kernel(
+    T * __restrict__ prenorm_features, const T * __restrict__ in, const T * __restrict__ w, const T * __restrict__ b,
     const uint32_t use_bias, const uint32_t pad_mode, const uint32_t ic, const uint32_t oc,
     const uint32_t iw, const uint32_t ih, const uint32_t ow, const uint32_t oh, const uint32_t fw, const uint32_t fh,
     const uint32_t pad, const uint32_t stride_x, const uint32_t stride_y, const uint32_t dil_x, const uint32_t dil_y
@@ -61,7 +62,7 @@ template<typename T> __device__ inline void conv_forward_pass_0_kernel(
     const uint32_t batch_idx = nc_idx / oc;
 
     extern __shared__ char shared_mem[];
-    T* shared_input_tile = reinterpret_cast<T*>(shared_mem);
+    T *shared_input_tile = reinterpret_cast<T *>(shared_mem);
     const uint32_t tile_h = (bdim_y - 1) * stride_y + (fh - 1) * dil_y + 1;
     const uint32_t tile_w = (bdim_x - 1) * stride_x + (fw - 1) * dil_x + 1;
 
@@ -77,7 +78,7 @@ template<typename T> __device__ inline void conv_forward_pass_0_kernel(
     for (uint32_t ic_idx = 0; ic_idx < ic; ++ic_idx) {
         const uint32_t threads_per_block = bdim_x * bdim_y;
 
-        const T* in_ptr = in + (batch_idx * ic + ic_idx) * (ih * iw);
+        const T *in_ptr = in + (batch_idx * ic + ic_idx) * (ih * iw);
 
         // Read all the relevant input
         for (uint32_t tile_idx = tid; tile_idx < total_tile_elems; tile_idx += threads_per_block) {
@@ -98,12 +99,21 @@ template<typename T> __device__ inline void conv_forward_pass_0_kernel(
 
                 if (gh >= -static_cast<int32_t>(pad) && gh < max_h_pad &&
                     gw >= -static_cast<int32_t>(pad) && gw < max_w_pad) {
-                    if (pad_mode == 1) { // Reflective
-                        gh = gh < 0 ? -gh : gh >= static_cast<int32_t>(ih) ? 2 * (static_cast<int32_t>(ih) - 1) - gh : gh;
-                        gw = gw < 0 ? -gw : gw >= static_cast<int32_t>(iw) ? 2 * (static_cast<int32_t>(iw) - 1) - gw : gw;
+                    if (pad_mode == 1) {
+                        // Reflective
+                        gh = gh < 0
+                                 ? -gh
+                                 : gh >= static_cast<int32_t>(ih)
+                                       ? 2 * (static_cast<int32_t>(ih) - 1) - gh
+                                       : gh;
+                        gw = gw < 0
+                                 ? -gw
+                                 : gw >= static_cast<int32_t>(iw)
+                                       ? 2 * (static_cast<int32_t>(iw) - 1) - gw
+                                       : gw;
                         fill_value = in_ptr[static_cast<uint32_t>(gh) * iw + static_cast<uint32_t>(gw)];
-                    }
-                    else if (pad_mode == 2) { // Replicate
+                    } else if (pad_mode == 2) {
+                        // Replicate
                         gh = gh < 0 ? 0 : gh >= static_cast<int32_t>(ih) ? static_cast<int32_t>(ih) - 1 : gh;
                         gw = gw < 0 ? 0 : gw >= static_cast<int32_t>(iw) ? static_cast<int32_t>(iw) - 1 : gw;
                         fill_value = in_ptr[static_cast<uint32_t>(gh) * iw + static_cast<uint32_t>(gw)];
@@ -119,11 +129,11 @@ template<typename T> __device__ inline void conv_forward_pass_0_kernel(
 
         // Accumulate sum
         if (ow_idx < ow && oh_idx < oh) {
-            const T* w_ptr = w + (oc_idx * ic + ic_idx) * (fh * fw);
+            const T *w_ptr = w + (oc_idx * ic + ic_idx) * (fh * fw);
             const uint32_t local_h_start = ty * stride_y;
             const uint32_t local_w_start = tx * stride_x;
 
-            #pragma unroll 4
+#pragma unroll 4
             for (uint32_t fh_idx = 0; fh_idx < fh; ++fh_idx) {
                 const uint32_t tile_row_offset = (local_h_start + fh_idx * dil_y) * tile_stride + local_w_start;
                 const uint32_t weight_row_offset = fh_idx * fw;
@@ -168,17 +178,36 @@ template<typename T> __device__ inline void conv_forward_pass_0_kernel(
  * @param on The batch size of the output tensors.
  * @param norm The normalisation mode.
  */
-template<typename T> __device__ inline void conv_forward_pass_1_kernel(
-    T* __restrict__ preact_features, T* __restrict__ centered_features, const T* __restrict__ prenorm_features,
-    const T* __restrict__ norm_w, const T* __restrict__ norm_b, T* __restrict__ norm_rstd,
+template<typename T>
+__device__ inline void conv_forward_pass_1_kernel(
+    T * __restrict__ preact_features, T * __restrict__ centered_features, const T * __restrict__ prenorm_features,
+    const T * __restrict__ norm_w, const T * __restrict__ norm_b, T * __restrict__ norm_rstd,
     const uint32_t ow, const uint32_t oh, const uint32_t oc, const uint32_t on, const uint32_t norm
 ) {
     if (norm == 1 || norm == 2) {
+        // RMSNorm vs LayerNorm
         forward_pass_1_kernel<T>(
             preact_features, centered_features, prenorm_features, norm_w, norm_b, norm_rstd,
             on, ow * oh * oc, norm
         );
+    } else {
+        // BatchNorm
+        forward_pass_1_kernel<T>(
+            preact_features, centered_features, prenorm_features, norm_w, norm_b, norm_rstd,
+            on * oh * ow, oc, norm, true, oh, ow
+        );
     }
+}
+
+template<typename T>
+__device__ inline void conv_forward_pass_2_kernel(
+    T * __restrict__ features, T * __restrict__ predrop_features, T * __restrict__ prepooling_features,
+    const T * __restrict__ preact_features, T * __restrict__ mask,
+    const uint32_t use_pooling, const uint32_t pad_mode, const uint32_t ic, const uint32_t oc,
+    const uint32_t iw, const uint32_t ih, const uint32_t ow, const uint32_t oh, const uint32_t pw, const uint32_t ph,
+    const uint32_t pad, const uint32_t stride_x, const uint32_t stride_y, const uint32_t dil_x, const uint32_t dil_y
+) {
+
 }
 
 #endif

@@ -1,6 +1,6 @@
 use std::process::exit;
 use std::time::SystemTime;
-use soklyn::{ConvBlock, KernelConfig, InitFunc, InitHeUniformFunc, PaddingType, Normalisation};
+use soklyn::{ConvBlock, KernelConfig, InitFunc, InitHeUniformFunc, PaddingType, Normalisation, PoolingType, Activation, Regularisation};
 use soklyn::core::Tensor4D;
 use soklyn::io::device::GpuContext;
 use soklyn::log::Error;
@@ -15,10 +15,12 @@ fn main() {
 type Precision = f32;
 
 fn stress_test_forward(context: &GpuContext, init: &mut InitHeUniformFunc) -> Result<(), Error> {
-    let layer = ConvBlock::<Precision>::default(
+    let layer = ConvBlock::<Precision>::new(
         &context, true, 64, &(500, 500), init,
         KernelConfig::new((80, 80), 1, PaddingType::ZeroPadding, (1, 1), (1, 1))?,
-        5, 40, Normalisation::Disabled,
+        None,//Some(KernelConfig::new((2, 2), 1, PaddingType::ZeroPadding, (1, 1), (1, 1))?),
+        None,
+        5, 40, Activation::Mish, Normalisation::Disabled, Regularisation::L2Regular(0.2), 0.1
     )?;
 
     let input = Tensor4D::zeros(context, &[64, 5, 500, 500])?;
@@ -37,13 +39,15 @@ fn run_pipeline() -> Result<(), Error> {
     //stress_test_forward(&context, &mut init)?;
     //return Ok(());
 
-    let layers = vec![
+    let mut layers = vec![
         ConvBlock::<Precision>::default(
             &context, true, 2, &(4, 3), &mut init,
             KernelConfig::new((2, 3), 2, PaddingType::ReflectivePadding, (1, 2), (2, 1))?,
-            2, 3, Normalisation::LayerNorm,
+            Some(KernelConfig::new((2, 2), 2, PaddingType::ReplicatePadding, (1, 1), (1, 1))?),
+            2, 3, Normalisation::BatchNorm,
         )?
     ];
+    layers[0].set_pooling_type(PoolingType::MaxPooling);
 
     let input = Tensor4D::<Precision>::from_cpu_vector(
         &context,
@@ -168,7 +172,7 @@ fn run_pipeline() -> Result<(), Error> {
      */
 
     /*
-    OUTPUTS: dilation is (2, 1), padding 2 ReflectivePadding Layer Norm
+    OUTPUTS: dilation is (2, 1), padding 2 ReflectivePadding LayerNorm
 -1.2679206,-1.1956363,-1.1233518,-1.5024934,-1.5747775,-1.6470618,
 -0.6802174,-0.6079333,-0.53564894,-0.9147899,-0.98707443,-1.059359,
 -1.2679206,-1.1956363,-1.1233518,-1.5024934,-1.5747775,-1.6470618,
@@ -193,6 +197,33 @@ fn run_pipeline() -> Result<(), Error> {
 0.11304361,-0.25868705,1.4371452,-0.34985894,1.3156548,-0.41404077,
 1.4290254,-0.2586917,0.10793112,-0.3377675,0.21150173,-0.4151228,
      */
+
+    /*
+    OUTPUTS: dilation is (2, 1), padding 2 ReflectivePadding BatchNorm
+-0.24861422,-0.24847089,-0.24832755,-0.24907939,-0.24922273,-0.24936607,
+-0.24744879,-0.24730545,-0.24716212,-0.24791396,-0.24805732,-0.24820065,
+-0.24861422,-0.24847089,-0.24832755,-0.24907939,-0.24922273,-0.24936607,
+
+-0.27344865,-0.27305946,-0.27267027,-0.27273646,-0.27312568,-0.27351487,
+-0.2705479,-0.2701587,-0.26976952,-0.26983574,-0.27022493,-0.27061412,
+-0.27344865,-0.27305946,-0.27267027,-0.27273646,-0.27312568,-0.27351487,
+
+-0.58430684,-0.5848535,-0.5854,-0.58585984,-0.5853132,-0.5847667,
+-0.58284885,-0.5833955,-0.58394206,-0.5844018,-0.5838553,-0.58330864,
+-0.58430684,-0.5848535,-0.5854,-0.58585984,-0.5853132,-0.5847667,
+----------------------------------------
+2.9027016,-0.058093604,-1.474746,-0.049124464,-0.2190144,-0.23315884,
+-1.4726174,-0.057949085,2.9231532,-0.08028663,1.6430873,-0.22026585,
+2.9027016,-0.058093604,-1.474746,-0.049124464,-0.2190144,-0.23315884,
+
+2.8553813,-0.058552627,-1.2281102,0.006241178,-0.52292657,-0.31144866,
+-1.2323762,-0.058897506,2.8909924,-0.027849024,2.150009,-0.3047854,
+2.8553813,-0.058552627,-1.2281102,0.006241178,-0.52292657,-0.31144866,
+
+2.6675665,-0.15667197,0.45683745,-0.28899804,0.6301533,-0.418445,
+0.46539274,-0.15666422,2.6811547,-0.30923194,2.4778514,-0.41663435,
+2.6675665,-0.15667197,0.45683745,-0.28899804,0.6301533,-0.418445,
+    */
 
     /*
     OUTPUTS: dilation is (2, 1), padding 2 ReplicatePadding
