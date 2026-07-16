@@ -214,25 +214,27 @@ __global__ void backward_pass_f16(
 
 __global__ void conv_forward_pass_0_kernel_f32(
     f32_t* prenorm_features, const f32_t* in, const f32_t* w, const f32_t* b,
-    const uint32_t use_bias, const uint32_t pad_mode, const uint32_t ic, const uint32_t oc,
+    const uint32_t use_bias, const uint32_t ic, const uint32_t oc,
     const uint32_t iw, const uint32_t ih, const uint32_t ow, const uint32_t oh, const uint32_t fw, const uint32_t fh,
-    const uint32_t pad, const uint32_t stride_x, const uint32_t stride_y, const uint32_t dil_x, const uint32_t dil_y
+    const uint32_t pad, const uint32_t pad_mode,
+    const uint32_t stride_x, const uint32_t stride_y, const uint32_t dil_x, const uint32_t dil_y
 ) {
     conv_forward_pass_0_kernel<f32_t>(
-        prenorm_features, in, w, b, use_bias, pad_mode, ic, oc, iw, ih, ow, oh, fw, fh,
-        pad, stride_x, stride_y, dil_x, dil_y
+        prenorm_features, in, w, b, use_bias, ic, oc, iw, ih, ow, oh, fw, fh,
+        pad, pad_mode, stride_x, stride_y, dil_x, dil_y
     );
 }
 
 __global__ void conv_forward_pass_0_kernel_f16(
     f16_t* prenorm_features, const f16_t* in, const f16_t* w, const f16_t* b,
-    const uint32_t use_bias, const uint32_t pad_mode, const uint32_t ic, const uint32_t oc,
+    const uint32_t use_bias, const uint32_t ic, const uint32_t oc,
     const uint32_t iw, const uint32_t ih, const uint32_t ow, const uint32_t oh, const uint32_t fw, const uint32_t fh,
-    const uint32_t pad, const uint32_t stride_x, const uint32_t stride_y, const uint32_t dil_x, const uint32_t dil_y
+    const uint32_t pad, const uint32_t pad_mode,
+    const uint32_t stride_x, const uint32_t stride_y, const uint32_t dil_x, const uint32_t dil_y
 ) {
     conv_forward_pass_0_kernel<f16_t>(
-        prenorm_features, in, w, b, use_bias, pad_mode, ic, oc, iw, ih, ow, oh, fw, fh,
-        pad, stride_x, stride_y, dil_x, dil_y
+        prenorm_features, in, w, b, use_bias, ic, oc, iw, ih, ow, oh, fw, fh,
+        pad, pad_mode, stride_x, stride_y, dil_x, dil_y
     );
 }
 
@@ -253,6 +255,38 @@ __global__ void conv_forward_pass_1_kernel_f16(
 ) {
     conv_forward_pass_1_kernel<f16_t>(
         preact_features, centered_features, prenorm_features, norm_w, norm_b, norm_rstd, ow, oh, oc, on, norm
+    );
+}
+
+__global__ void conv_forward_pass_2_kernel_f32(
+    f32_t* __restrict__ features, f32_t* __restrict__ predrop_features, f32_t* __restrict__ prepooling_features,
+    const f32_t* __restrict__ preact_features, f32_t* __restrict__ mask, const uint32_t use_dropout,
+    const uint32_t pool_mode, const uint32_t channels,
+    const uint32_t iw, const uint32_t ih, const uint32_t ow, const uint32_t oh, const uint32_t pw, const uint32_t ph,
+    const uint32_t pad, const uint32_t pad_mode,
+    const uint32_t stride_x, const uint32_t stride_y, const uint32_t dil_x, const uint32_t dil_y,
+    const uint32_t act, const f32_t leaky_relu_coeff, const f32_t mask_coeff, const uint32_t seed
+) {
+    conv_forward_pass_2_kernel<f32_t>(
+        features, predrop_features, prepooling_features, preact_features, mask, use_dropout,
+        pool_mode, channels, iw, ih, ow, oh, pw, ph, pad, pad_mode, stride_x, stride_y,
+        dil_x, dil_y, act, leaky_relu_coeff, mask_coeff, seed
+    );
+}
+
+__global__ void conv_forward_pass_2_kernel_f16(
+    f16_t* __restrict__ features, f16_t* __restrict__ predrop_features, f16_t* __restrict__ prepooling_features,
+    const f16_t* __restrict__ preact_features, f16_t* __restrict__ mask, const uint32_t use_dropout,
+    const uint32_t pool_mode, const uint32_t channels,
+    const uint32_t iw, const uint32_t ih, const uint32_t ow, const uint32_t oh, const uint32_t pw, const uint32_t ph,
+    const uint32_t pad, const uint32_t pad_mode,
+    const uint32_t stride_x, const uint32_t stride_y, const uint32_t dil_x, const uint32_t dil_y,
+    const uint32_t act, const f32_t leaky_relu_coeff, const f32_t mask_coeff, const uint32_t seed
+) {
+    conv_forward_pass_2_kernel<f16_t>(
+        features, predrop_features, prepooling_features, preact_features, mask, use_dropout,
+        pool_mode, channels, iw, ih, ow, oh, pw, ph, pad, pad_mode, stride_x, stride_y,
+        dil_x, dil_y, act, leaky_relu_coeff, mask_coeff, seed
     );
 }
 

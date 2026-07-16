@@ -225,7 +225,7 @@ __device__ inline void forward_pass_2_kernel(
                 out[idx] = zero;
             }
         } else {
-            out[idx] = sum;
+            out[idx] = static_cast<T>(sum);
         }
     }
 }

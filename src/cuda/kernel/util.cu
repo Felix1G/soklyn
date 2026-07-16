@@ -6,19 +6,19 @@
 #include "types.hpp"
 #include "math.cu"
 
-__device__ inline void cast_f32_f16_t(const f32_t *in, f16_t *out, const uint32_t len) {
+__device__ __forceinline__ void cast_f32_f16_t(const f32_t *in, f16_t *out, const uint32_t len) {
     if (const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < len) {
         out[idx] = static_cast<f16_t>(in[idx]);
     }
 }
 
-__device__ inline void cast_f16_f32_t(const f16_t *in, f32_t *out, const uint32_t len) {
+__device__ __forceinline__ void cast_f16_f32_t(const f16_t *in, f32_t *out, const uint32_t len) {
     if (const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < len) {
         out[idx] = static_cast<f32_t>(in[idx]);
     }
 }
 
-__device__ inline uint32_t dev_nchw_idx(
+__device__ __forceinline__ uint32_t dev_nchw_idx(
     const uint32_t c, const uint32_t h, const uint32_t w,
     const uint32_t ni, const uint32_t ci, const uint32_t hi, const uint32_t wi
 ) {
@@ -41,7 +41,6 @@ __device__ inline void dev_block_stride_sum_1d(f32_t *shared_sum) {
 }
 
 /**
- * 0: None, 1: Sigmoid, 2: ReLU, 3: LeakyReLU, 4: Tanh, 5: Softmax (Called using softmax_kernel), 6: SiLU, 7: Mish
  * @param act The activation mode.
  * @param sum The value to be passed into the activation function.
  * @param leaky_relu_coeff A coefficient specially for the LeakyReLU activation function as a multiplier for negative values.
@@ -50,23 +49,23 @@ __device__ inline void dev_block_stride_sum_1d(f32_t *shared_sum) {
 __device__ inline f32_t dev_activation(const uint32_t act, const f32_t sum, const f32_t leaky_relu_coeff) {
     f32_t new_sum = sum;
 
-    switch (act) {
-        case 1:
+    switch (act) { // 5: Softmax (Called using softmax_kernel
+        case 1: // Sigmoid
             new_sum = 1.0f / (1.0f + CudaMath<f32_t>::exp(-sum));
             break;
-        case 2:
+        case 2: // ReLU
             new_sum = CudaMath<f32_t>::max(0.0f, sum);
             break;
-        case 3:
+        case 3: // LeakyReLU
             new_sum = sum > 0.0f ? sum : leaky_relu_coeff * sum;
             break;
-        case 4:
+        case 4: // Tanh
             new_sum = CudaMath<f32_t>::tanh(sum);
             break;
-        case 6:
+        case 6: // SiLU
             new_sum = sum / (1.0f + CudaMath<f32_t>::exp(-sum));
             break;
-        case 7: {
+        case 7: { // Mish
             // Upscaling to prevent overflow
             const f32_t e_x = CudaMath<f32_t>::exp(sum);
 
@@ -80,7 +79,7 @@ __device__ inline f32_t dev_activation(const uint32_t act, const f32_t sum, cons
             new_sum = slope;
             break;
         }
-        default:
+        default: // None
             new_sum = sum;
             break;
     }
@@ -89,7 +88,6 @@ __device__ inline f32_t dev_activation(const uint32_t act, const f32_t sum, cons
 }
 
 /**
- * 0: None, 1: Sigmoid, 2: ReLU, 3: LeakyReLU, 4: Tanh, 5: Softmax (Directly paired with CEL in the compute error functions), 6: SiLU, 7: Mish
  * @tparam T Either f32_t or f16_t.
  * @param act The activation mode.
  * @param err_delta The error delta before activation.
@@ -103,25 +101,25 @@ __device__ inline f32_t dev_activation_derivative(
 ) {
     f32_t err = err_delta;
 
-    switch (act) {
-        case 1:
+    switch (act) { // 5: Softmax (Directly paired with CEL in the compute error functions)
+        case 1: // Sigmoid
             err *= out_v * (1.0f - out_v);
             break;
-        case 2:
+        case 2: // ReLU
             err *= out_v > 0.0f ? 1.0f : 0.0f;
             break;
-        case 3:
+        case 3: // LeakyReLU
             err *= out_v > 0.0f ? 1.0f : leaky_relu_coeff;
             break;
-        case 4:
+        case 4: // Tanh
             err *= 1.0f - out_v * out_v;
             break;
-        case 6: {
+        case 6: { // SiLU
             const f32_t sig_x = 1.0f / (1.0f + CudaMath<f32_t>::exp(-in_x));
             err *= sig_x + out_v * (1.0f - sig_x);
             break;
         }
-        case 7: {
+        case 7: { // Mish
             const f32_t e_x = CudaMath<f32_t>::exp(in_x);
 
             const f32_t sp = in_x > 20.0f ? in_x : CudaMath<f32_t>::log(1.0f + e_x);
@@ -136,7 +134,7 @@ __device__ inline f32_t dev_activation_derivative(
             err *= slope;
             break;
         }
-        default:
+        default: // None
             err = err_delta;
             break;
     }

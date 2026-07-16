@@ -30,8 +30,9 @@ pub struct GpuContext {
     compute_output_layer_error_func: (CudaFunction, CudaFunction),
     compute_hidden_layer_error_func: (CudaFunction, CudaFunction),
     backward_pass_func: (CudaFunction, CudaFunction),
-    conv_forward_pass_func0: (CudaFunction, CudaFunction),
-    conv_forward_pass_func1: (CudaFunction, CudaFunction), // CONV Z = WX + B
+    conv_forward_pass_func0: (CudaFunction, CudaFunction), // CONV Z = WX + B
+    conv_forward_pass_func1: (CudaFunction, CudaFunction), // Normalisation
+    conv_forward_pass_func2: (CudaFunction, CudaFunction), // Activation, Pooling, Dropout
     tile_dim: u32,
     tile_dim_minus_1: u32,
     tile_dim_2: u32,
@@ -79,6 +80,8 @@ impl GpuContext {
         let conv_forward_pass_0_f16 = load_kernel("conv_forward_pass_0_kernel_f16");
         let conv_forward_pass_1_f32 = load_kernel("conv_forward_pass_1_kernel_f32");
         let conv_forward_pass_1_f16 = load_kernel("conv_forward_pass_1_kernel_f16");
+        let conv_forward_pass_2_f32 = load_kernel("conv_forward_pass_2_kernel_f32");
+        let conv_forward_pass_2_f16 = load_kernel("conv_forward_pass_2_kernel_f16");
 
         let stream = CudaContext::new_stream(&context).expect("Failed to create stream");
         context
@@ -110,6 +113,7 @@ impl GpuContext {
             backward_pass_func: (backward_pass_f32, backward_pass_f16),
             conv_forward_pass_func0: (conv_forward_pass_0_f32, conv_forward_pass_0_f16),
             conv_forward_pass_func1: (conv_forward_pass_1_f32, conv_forward_pass_1_f16),
+            conv_forward_pass_func2: (conv_forward_pass_2_f32, conv_forward_pass_2_f16),
             tile_dim,
             tile_dim_minus_1: tile_dim - 1,
             tile_dim_2,

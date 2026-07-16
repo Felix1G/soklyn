@@ -288,6 +288,7 @@ impl InitFunc for InitZeroFunc {
     }
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum PaddingType {
     /// Padding is filled with `0`s.
     ///
@@ -314,6 +315,7 @@ impl PaddingType {
 }
 
 pub struct KernelConfig {
+    enable: bool,
     dimension: (usize, usize),
     pad: usize,
     auto_pad: bool,
@@ -323,7 +325,22 @@ pub struct KernelConfig {
 }
 
 impl KernelConfig {
-    /// Creates a manual padding configuration where an explicit number of zero-filled rows
+    /// Creates a disabled manual kernel configuration for either filters or pooling.
+    ///
+    /// Dimension is set to `(1, 1)`, `padding` is set to `0`, and stride is set to `(1, 1)`
+    pub fn disable() -> Self {
+        Self {
+            enable: false,
+            dimension: (1, 1),
+            pad: 0,
+            auto_pad: false,
+            pad_type: PaddingType::ZeroPadding,
+            stride: (1, 1),
+            dilation: (1, 1),
+        }
+    }
+
+    /// Creates a manual kernel configuration for either filters or pooling where an explicit number of zero-filled rows
     /// and columns are symmetrically appended to all outer boundaries of the input tensor.
     ///
     /// # Arguments
@@ -368,6 +385,7 @@ impl KernelConfig {
         }
 
         Ok(Self {
+            enable: true,
             dimension,
             pad,
             auto_pad: false,
@@ -377,7 +395,7 @@ impl KernelConfig {
         })
     }
 
-    /// Creates an automatic padding configuration that dynamically computes the required
+    /// Creates an automatic kernel configuration for either filters or pooling that dynamically computes the required
     /// padding size at execution time, ensuring that the filter covers all spatial boundary
     /// elements and the output dimensions are ceiling-divided by the stride value.
     pub fn auto_pad(dimension: (usize, usize), pad_type: PaddingType,
@@ -390,6 +408,7 @@ impl KernelConfig {
     getter!(pub get_pad_type, pad_type, PaddingType);
     getter!(pub get_stride, stride, (usize, usize));
     getter!(pub get_dilation, dilation, (usize, usize));
+    getter_copy!(pub(crate) is_enabled, enable, bool);
 
     pub(crate) fn auto_pad_val(
         &self,
@@ -460,7 +479,10 @@ impl KernelConfig {
 }
 
 /// The type of pooling supported for the Convolutional Neural Network.
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum PoolingType {
+    /// No pooling will be done.
+    NoPooling,
     /// Takes the maximum value from a pooling window.
     MaxPooling,
     /// Sums all values from the pooling window.
@@ -470,4 +492,15 @@ pub enum PoolingType {
     /// This is usually implemented with a single pooling kernel that spans the entire output spatial image.
     /// For this type of implementation, it functions as `Global Average Pooling`.
     AveragePooling,
+}
+
+impl PoolingType {
+    pub(crate) fn ordinal(&self) -> usize {
+        match self {
+            PoolingType::NoPooling => 0,
+            PoolingType::MaxPooling => 1,
+            PoolingType::SumPooling => 2,
+            PoolingType::AveragePooling => 3
+        }
+    }
 }

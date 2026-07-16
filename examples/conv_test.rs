@@ -1,6 +1,7 @@
 use std::process::exit;
 use std::time::SystemTime;
 use soklyn::{ConvBlock, KernelConfig, InitFunc, InitHeUniformFunc, PaddingType, Normalisation, PoolingType, Activation, Regularisation};
+use soklyn::Activation::{Mish, ReLU};
 use soklyn::core::Tensor4D;
 use soklyn::io::device::GpuContext;
 use soklyn::log::Error;
@@ -18,8 +19,7 @@ fn stress_test_forward(context: &GpuContext, init: &mut InitHeUniformFunc) -> Re
     let layer = ConvBlock::<Precision>::new(
         &context, true, 64, &(500, 500), init,
         KernelConfig::new((80, 80), 1, PaddingType::ZeroPadding, (1, 1), (1, 1))?,
-        None,//Some(KernelConfig::new((2, 2), 1, PaddingType::ZeroPadding, (1, 1), (1, 1))?),
-        None,
+        KernelConfig::disable(), PoolingType::NoPooling,
         5, 40, Activation::Mish, Normalisation::Disabled, Regularisation::L2Regular(0.2), 0.1
     )?;
 
@@ -43,11 +43,13 @@ fn run_pipeline() -> Result<(), Error> {
         ConvBlock::<Precision>::default(
             &context, true, 2, &(4, 3), &mut init,
             KernelConfig::new((2, 3), 2, PaddingType::ReflectivePadding, (1, 2), (2, 1))?,
-            Some(KernelConfig::new((2, 2), 2, PaddingType::ReplicatePadding, (1, 1), (1, 1))?),
+            KernelConfig::new((2, 2), 2, PaddingType::ZeroPadding, (2, 1), (1, 2))?,
             2, 3, Normalisation::BatchNorm,
         )?
     ];
     layers[0].set_pooling_type(PoolingType::MaxPooling);
+    layers[0].set_activation(Mish);
+    //layers[0].set_mask_coeff(0.8);
 
     let input = Tensor4D::<Precision>::from_cpu_vector(
         &context,
@@ -71,8 +73,8 @@ fn run_pipeline() -> Result<(), Error> {
         &[2, 2, 3, 4]
     )?;
 
-    let _ = layers[0].forward(&context, &input, 2, false, 1)?;
-    let out_img = layers[0].get_preact_features().download(&context)?;
+    let _ = layers[0].forward(&context, &input, 2, true, 1)?;
+    let out_img = layers[0].get_features().download(&context)?;
     let filter_img = layers[0].get_filter_weights().download(&context)?;
 
     println!("\n\nFILTERS:");
@@ -124,6 +126,8 @@ fn run_pipeline() -> Result<(), Error> {
     100.0, 1000.0, 10000.0, 0.0,
     0.1, 0.01, 0.001, 0.1,
     10000.0, 1000.0, -20.0, 100.0
+
+    Outputs using preact_features
      */
 
     // seed: 10, factor: 0.1
@@ -199,7 +203,7 @@ fn run_pipeline() -> Result<(), Error> {
      */
 
     /*
-    OUTPUTS: dilation is (2, 1), padding 2 ReflectivePadding BatchNorm
+    OUTPUTS: dilation is (2, 1), padding 2 ReflectivePadding BatchNorm ==============================================================================
 -0.24861422,-0.24847089,-0.24832755,-0.24907939,-0.24922273,-0.24936607,
 -0.24744879,-0.24730545,-0.24716212,-0.24791396,-0.24805732,-0.24820065,
 -0.24861422,-0.24847089,-0.24832755,-0.24907939,-0.24922273,-0.24936607,

@@ -6,7 +6,7 @@ use crate::Activation::Identity;
 use crate::Normalisation::Disabled;
 use crate::{getter, getter_copy, setter, Activation, KernelConfig, InitFunc, Normalisation, PrecisionType, Regularisation, getter_option, PoolingType};
 use half::f16;
-use crate::PoolingType::MaxPooling;
+use crate::PoolingType::{MaxPooling, NoPooling};
 
 pub(crate) struct ConvForwardCache<T: PrecisionType> {
     features: Tensor4D<T>,
@@ -84,8 +84,8 @@ pub struct ConvBlock<T: PrecisionType> {
     filter_weights: Tensor4D<T>,
     filter_biases: Tensor1D<T>,
     filter_cfg: KernelConfig,
-    pooling_cfg: Option<KernelConfig>,
-    pooling_type: Option<PoolingType>,
+    pooling_cfg: KernelConfig,
+    pooling_type: PoolingType,
     norm_cache: Option<ConvNormCache<T>>,
     mask: Tensor4D<T>,
     max_batch_size: usize,
@@ -100,7 +100,7 @@ pub struct ConvBlock<T: PrecisionType> {
 impl<T: PrecisionType> ConvBlock<T> {
     /// Create a new convolutional block with default arguments, including setting
     /// activation to [`Identity`], regularisation to [`Regularisation::None`],
-    /// pooling type to [`MaxPooling`], and `mask_coeff` to `0.0`.
+    /// pooling type to [`NoPooling`], and `mask_coeff` to `0.0`.
     ///
     /// # Arguments
     /// * `context` - See [`GpuContext`].
@@ -108,8 +108,8 @@ impl<T: PrecisionType> ConvBlock<T> {
     /// * `max_batch_size` - Maximum size of a batch.
     /// * `max_input_dim` - Maximum width (`max_input_dim.0`) and height (`max_input_dim.1`) of the input image.
     /// * `init` - See [`InitFunc`]. Used for initialising weight filters.
-    /// * `filter_cfg` - The configuration for the filters. See [`KernelConfig`]. Pass `None` to disable.
-    /// * `pooling_cfg` - The configuration for pooling. See [`KernelConfig`]. Pass `None` to disable.
+    /// * `filter_cfg` - The configuration for the filters. See [`KernelConfig`].
+    /// * `pooling_cfg` - The configuration for pooling. See [`KernelConfig`].
     /// * `in_channels` - Number of input feature channels.
     /// * `out_channels` - Number of output feature channels.
     /// * `normalisation` - See [`Normalisation`]. Pass [`Disabled`] to disable normalisation.
@@ -120,7 +120,7 @@ impl<T: PrecisionType> ConvBlock<T> {
         max_input_dim: &(usize, usize),
         init: &mut I,
         filter_cfg: KernelConfig,
-        pooling_cfg: Option<KernelConfig>,
+        pooling_cfg: KernelConfig,
         in_channels: usize,
         out_channels: usize,
         normalisation: Normalisation
@@ -133,7 +133,7 @@ impl<T: PrecisionType> ConvBlock<T> {
             init,
             filter_cfg,
             pooling_cfg,
-            Some(MaxPooling),
+            MaxPooling,
             in_channels,
             out_channels,
             Identity,
@@ -152,8 +152,8 @@ impl<T: PrecisionType> ConvBlock<T> {
     /// * `max_input_dim` - Maximum width (`max_input_dim.0`) and height (`max_input_dim.1`) of the input image.
     /// * `init` - See [`InitFunc`]. Used for initialising weight filters.
     /// * `filter_cfg` - The configuration for the filters. See [`KernelConfig`].
-    /// * `pooling_cfg` - The configuration for pooling. See [`KernelConfig`]. Pass `None` to disable.
-    /// * `pooling_type` - The type of pooling. See [`PoolingType`]. Pass `None` to disable.
+    /// * `pooling_cfg` - The configuration for pooling. See [`KernelConfig`].
+    /// * `pooling_type` - The type of pooling. See [`PoolingType`].
     /// * `in_channels` - Number of input feature channels.
     /// * `out_channels` - Number of output feature channels.
     /// * `padding` - Border pixel extension count for input boundary handling.
@@ -168,8 +168,8 @@ impl<T: PrecisionType> ConvBlock<T> {
         max_input_dim: &(usize, usize),
         init: &mut I,
         filter_cfg: KernelConfig,
-        pooling_cfg: Option<KernelConfig>,
-        pooling_type: Option<PoolingType>,
+        pooling_cfg: KernelConfig,
+        pooling_type: PoolingType,
         in_channels: usize,
         out_channels: usize,
         activation: Activation,
@@ -205,8 +205,8 @@ impl<T: PrecisionType> ConvBlock<T> {
         }
 
         let pooling_out_dim: (usize, usize);
-        if let Some(cfg) = &pooling_cfg {
-            pooling_out_dim = cfg.elements_from_length(&filter_out_dim);
+        if pooling_cfg.is_enabled() {
+            pooling_out_dim = pooling_cfg.elements_from_length(&filter_out_dim);
             if pooling_out_dim.0 == 0 || pooling_out_dim.1 == 0 {
                 return Err(Error::InvalidConfiguration {
                     reason: String::from("The pooling size is too large. The output tensor cannot be created."),
@@ -234,7 +234,7 @@ impl<T: PrecisionType> ConvBlock<T> {
                     pooling_out_dim.1,
                     pooling_out_dim.0,
                 ],
-                pooling_cfg.is_some()
+                pooling_cfg.is_enabled()
             )?,
             Tensor4D::from_cpu_vector(
                 context,
@@ -266,8 +266,8 @@ impl<T: PrecisionType> ConvBlock<T> {
         filter_weights: Tensor4D<T>,
         filter_biases: Tensor1D<T>,
         filter_cfg: KernelConfig,
-        pooling_cfg: Option<KernelConfig>,
-        pooling_type: Option<PoolingType>,
+        pooling_cfg: KernelConfig,
+        pooling_type: PoolingType,
         mask: Tensor4D<T>,
         norm_cache: Option<ConvNormCache<T>>,
         max_batch_size: usize,
@@ -300,14 +300,15 @@ impl<T: PrecisionType> ConvBlock<T> {
     getter!(pub get_filter_weights, filter_weights, Tensor4D<T>);
     getter!(pub get_filter_biases, filter_biases, Tensor1D<T>);
     getter!(pub get_preact_features, forward_cache.preact_features, Tensor4D<T>);
+    getter!(pub get_prepooling_features, forward_cache.prepooling_features, Tensor4D<T>);
+    getter!(pub get_predrop_features, forward_cache.predrop_features, Tensor4D<T>);
     getter!(pub get_features, forward_cache.features, Tensor4D<T>);
     getter_option!(pub(crate) get_norm_cache, norm_cache, Option<ConvNormCache<T>>);
     getter!(pub get_mask, mask, Tensor4D<T>);
 
     // Getting configurations
     getter!(pub get_filter_cfg, filter_cfg, KernelConfig);
-    getter_option!(pub get_pooling_cfg, pooling_cfg, Option<KernelConfig>);
-    getter_option!(pub get_pooling_type, pooling_type, Option<PoolingType>);
+    getter_option!(pub get_pooling_cfg, pooling_cfg, KernelConfig);
     getter_copy!(pub get_max_batch_size, max_batch_size, usize);
     getter_copy!(pub get_mask_coeff, mask_coeff, f32);
     setter!(pub set_mask_coeff, mask_coeff, f32);
@@ -318,11 +319,18 @@ impl<T: PrecisionType> ConvBlock<T> {
     setter!(pub set_regularisation, regularisation, Regularisation);
     getter_copy!(pub is_training_mode, is_training, bool);
 
+    /// Note: if no pooling configuration was specified, this function will always return [`NoPooling`].
+    pub fn get_pooling_type(&self) -> PoolingType {
+        if self.pooling_cfg.is_enabled() {
+            self.pooling_type
+        } else {
+            NoPooling
+        }
+    }
+
     /// Note: if no pooling configuration was specified, this function will have no effect.
     pub fn set_pooling_type(&mut self, pooling_type: PoolingType) {
-        if self.pooling_cfg.is_some() {
-            self.pooling_type = Some(pooling_type);
-        }
+        self.pooling_type = pooling_type;
     }
 
     fn check_input_dimension(&self, input: &Tensor4D<T>, batch_size: usize) -> Result<(), Error> {
