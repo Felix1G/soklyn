@@ -256,14 +256,14 @@ impl<T: PrecisionType> ForwardCache<T> {
     }
 }
 
-/// # The Backbone of the Entire Neural Network
+/// # The Backbone of the Entire Feed Forward Neural Network
 /// This dense block stores all the tensors and parameters required for calculation between 2 neural network layers.
 /// The `max_batch_size` is required to allocate the required cache to input and output tensors.
 /// Preferably, `max_batch_size` should be the batch size used during training.
 ///
 /// To signal that this Linear is linked to the output layer, set its [`Activation`] to [`Identity`].
 ///
-/// The calculation goes this way:
+/// The forward pass goes this way:
 ///
 /// `Input` -> `Weights` -> `Biases` -> `Normalisation` -> `Activation` -> `Mask (dropout)` -> `Output`
 #[derive(Derivative)]
@@ -755,6 +755,7 @@ impl<T: PrecisionType> DenseBlock<T> {
     /// Computes the error delta for this output layer.
     ///
     /// Note: dropouts are ignored i.e. output layers should not have dropouts.
+    /// Also, the activation will be directly applied into the `output` tensor itself.
     ///
     /// # Arguments
     /// * `context` - GPU Context. See [`GpuContext`].
@@ -783,7 +784,7 @@ impl<T: PrecisionType> DenseBlock<T> {
 
         if target.cols() != self.linear_state.w.cols() {
             return Err(Error::MismatchedDimensions {
-                reason: "loss target columns",
+                reason: "target columns",
                 expected: self.linear_state.w.cols(),
                 found: target.cols(),
             });

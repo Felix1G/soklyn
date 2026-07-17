@@ -1,10 +1,10 @@
-use crate::core::{Tensor1D, Tensor4D};
+use crate::core::{Tensor1D, Tensor2D, Tensor4D};
 use crate::io::device::GpuContext;
 use crate::log::Error;
 use crate::r#type::CastPrecision;
 use crate::Activation::Identity;
 use crate::Normalisation::Disabled;
-use crate::{getter, getter_copy, setter, Activation, KernelConfig, InitFunc, Normalisation, PrecisionType, Regularisation, getter_option, PoolingType};
+use crate::{getter, getter_copy, setter, Activation, KernelConfig, InitFunc, Normalisation, PrecisionType, Regularisation, getter_option, PoolingType, LossFunc};
 use half::f16;
 use crate::PoolingType::{MaxPooling, NoPooling};
 
@@ -78,7 +78,19 @@ impl<T: PrecisionType> ConvNormCache<T> {
     }
 }
 
-
+/// # The Backbone of the Entire Convolutional Neural Network
+/// This dense block stores all the tensors and parameters required for calculation between 2 CNN layers.
+/// The `max_batch_size` is required to allocate the required cache to input and output tensors.
+/// Preferably, `max_batch_size` should be the batch size used during training.
+///
+/// To signal that this Linear is linked to the output layer, set its [`Activation`] to [`Identity`].
+///
+/// Unlike the FFN, the **normalisation** must be set within the creation of the instance.
+///
+/// The forward pass goes this way:
+///
+/// `Input` -> `Filter Weights` -> `Filter Biases` -> `Normalisation` -> `Activation` ->
+/// `Pooling` -> `Mask (dropout)` -> `Output`
 pub struct ConvBlock<T: PrecisionType> {
     forward_cache: ConvForwardCache<T>,
     filter_weights: Tensor4D<T>,
@@ -177,6 +189,12 @@ impl<T: PrecisionType> ConvBlock<T> {
         regularisation: Regularisation,
         mask_coeff: f32,
     ) -> Result<Self, Error> {
+        if max_input_dim.0 == 0 || max_input_dim.1 == 0 {
+            return Err(Error::InvalidConfiguration {
+                reason: String::from("Maximum input dimension size cannot be 0."),
+            });
+        }
+
         if max_batch_size == 0 {
             return Err(Error::InvalidConfiguration {
                 reason: String::from("Batch size cannot be 0."),
@@ -482,6 +500,97 @@ impl<T: PrecisionType> ConvBlock<T> {
         )?;
 
         Ok(&self.forward_cache.features)
+    }
+
+    /// Computes the error delta for this output layer.
+    ///
+    /// Note: dropouts are ignored i.e. output layers should not have dropouts.
+    /// Also, the activation will be directly applied into the `features` tensor itself.
+    ///
+    /// # Arguments
+    /// * `context` - GPU Context. See [`GpuContext`].
+    /// * `target` - A [`Tensor4D<T>`] with size `(batch size, output features)` representing
+    /// the current target batch.
+    /// * `err_mode` - See [`LossFunc`] for the available error functions.
+    /// * `act_mode` - See [`Activation`] for the available activation functions.
+    ///
+    /// # Errors
+    /// This function will return an error if:
+    /// * [`Error::TrainingModeRequired`] - The network is not currently in training mode.
+    /// * [`Error::MismatchedDimensions`] - The number of target columns does not match the linear layer weight columns.
+    /// * [`Error::AllocationLimitExceeded`] - The target batch size (rows) exceeds the configured `max_batch_size`.
+    /// * [`Error::InvalidConfiguration`] - An incompatible combination of [`LossFunc`] and [`Activation`] function is provided.
+    /// * Any underlying low-level CUDA driver or synchronisation failure occurs during GPU execution.
+    pub fn compute_loss(
+        &self,
+        context: &GpuContext,
+        target: &Tensor4D<T>,
+        err_mode: LossFunc,
+        act_mode: Activation,
+    ) -> Result<(), Error> {
+        if !self.is_training {
+            return Err(Error::TrainingModeRequired("compute loss"));
+        }
+
+        if target.height() != self.forward_cache.features.height() {
+            return Err(Error::MismatchedDimensions {
+                reason: "target height",
+                expected: self.forward_cache.features.height(),
+                found: target.height(),
+            });
+        }
+
+        if target.width() != self.forward_cache.features.width() {
+            return Err(Error::MismatchedDimensions {
+                reason: "target width",
+                expected: self.forward_cache.features.width(),
+                found: target.width(),
+            });
+        }
+
+        if target.channels() != self.forward_cache.features.channels() {
+            return Err(Error::MismatchedDimensions {
+                reason: "target channels",
+                expected: self.forward_cache.features.channels(),
+                found: target.channels(),
+            });
+        }
+
+        if target.batches() > self.max_batch_size {
+            return Err(Error::AllocationLimitExceeded {
+                received: target.batches(),
+                max: self.max_batch_size,
+                reason: "target batches"
+            });
+        }
+
+        match err_mode {
+            LossFunc::MeanSquareLoss => {
+                if act_mode == Activation::Softmax {
+                    return Err(Error::InvalidConfiguration {
+                        reason: "Mean Squared Loss does not support the Softmax activation function.".to_string(),
+                    });
+                }
+            }
+            LossFunc::CrossEntropyLoss => {
+                if act_mode != Activation::Softmax {
+                    return Err(Error::InvalidConfiguration {
+                        reason: "Cross-Entropy Loss only supports the Softmax activation function.".to_string(),
+                    });
+                }
+            }
+            LossFunc::BinaryCrossEntropy => {
+                if act_mode != Activation::Sigmoid {
+                    return Err(Error::InvalidConfiguration {
+                        reason: "Binary Cross-Entropy only supports the Sigmoid activation function.".to_string(),
+                    });
+                }
+            }
+        }
+
+        context.gpu_conv_compute_output_layer_error(self, target, err_mode, act_mode)?;
+
+        Ok(())
     }
 
     fn cast<U: PrecisionType>(self, context: &GpuContext) -> Result<ConvBlock<U>, Error> {

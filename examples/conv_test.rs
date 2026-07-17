@@ -1,10 +1,11 @@
 use std::process::exit;
 use std::time::SystemTime;
-use soklyn::{ConvBlock, KernelConfig, InitFunc, InitHeUniformFunc, PaddingType, Normalisation, PoolingType, Activation, Regularisation};
-use soklyn::Activation::{Mish, ReLU};
+use soklyn::{ConvBlock, KernelConfig, InitFunc, InitHeUniformFunc, PaddingType, Normalisation, PoolingType, Activation, Regularisation, LossFunc};
+use soklyn::Activation::{Mish, ReLU, Softmax};
 use soklyn::core::Tensor4D;
 use soklyn::io::device::GpuContext;
 use soklyn::log::Error;
+use soklyn::LossFunc::CrossEntropyLoss;
 
 fn main() {
     if let Err(err) = run_pipeline() {
@@ -75,6 +76,9 @@ fn run_pipeline() -> Result<(), Error> {
     )?;
 
     let _ = layers[0].forward(&context, &input, 2, true, 1)?;
+
+    //layers[0].compute_loss(&context, &Tensor4D::zeros(&context, &[0, 0, 0, 0])?, CrossEntropyLoss, Softmax)?;
+
     let out_img = layers[0].get_features().download(&context)?;
     let filter_img = layers[0].get_filter_weights().download(&context)?;
 

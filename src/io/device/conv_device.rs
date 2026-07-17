@@ -1,7 +1,7 @@
-use crate::core::{scramble_seed, Tensor4D};
+use crate::core::{scramble_seed, Tensor2D, Tensor4D};
 use crate::io::device::GpuContext;
 use crate::log::Error;
-use crate::{Activation, ConvBlock, Normalisation, Precision, PrecisionType};
+use crate::{Activation, ConvBlock, DenseBlock, LossFunc, Normalisation, Precision, PrecisionType};
 use cudarc::driver::{LaunchConfig, PushKernelArg};
 
 impl GpuContext {
@@ -228,6 +228,55 @@ impl GpuContext {
             self.stream.synchronize()?;
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn gpu_conv_compute_output_layer_error<T: PrecisionType>(
+        &self,
+        cur_layer: &ConvBlock<T>,
+        target: &Tensor4D<T>,
+        err_mode: LossFunc,
+        activation: Activation,
+    ) -> Result<(), Error> {
+        let features = cur_layer.get_features();
+        let m = features.batches();
+
+        let m_u32 = m as u32;
+        let err_mode_u32 = err_mode as u32;
+        let norm_mode_u32 = cur_layer.get_normalisation().ordinal() as u32;
+        let act_mode_u32 = activation.ordinal() as u32;
+
+        let leaky_relu_coeff = match activation {
+            Activation::LeakyReLU { coeff } => coeff,
+            _ => 0.0,
+        };
+
+        // Run softmax if needed first
+        if activation == Activation::Softmax {
+            let cols_u32 = (features.channels() * features.width() * features.height()) as u32;
+            let mut softmax_builder = self.stream.launch_builder(match T::precision() {
+                Precision::FP32 => &self.softmax_func.0,
+                Precision::FP16 => &self.softmax_func.1,
+            });
+
+            softmax_builder
+                .arg(features.get_data())
+                .arg(&m_u32)
+                .arg(&cols_u32);
+
+            let softmax_cfg = LaunchConfig {
+                grid_dim: (m as u32, 1, 1),
+                block_dim: (self.tile_dim_2, 1, 1),
+                shared_mem_bytes: 0,
+            };
+
+            unsafe {
+                softmax_builder.launch(softmax_cfg)?;
+            }
+
+            self.stream.synchronize()?;
+        }
+        
         Ok(())
     }
 }
