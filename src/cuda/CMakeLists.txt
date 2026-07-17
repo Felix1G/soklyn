@@ -9,11 +9,12 @@ if(CMAKE_EXPORT_COMPILE_COMMANDS)
 endif()
 
 add_library(nn_math OBJECT nn_math.cu
-        kernel/types.hpp
-        kernel/util.cu kernel/math.cu
-        kernel/ffn/forward.cu kernel/ffn/backward.cu
-        kernel/ffn/forward_wmma.cu kernel/ffn/backward_wmma.cu
-        kernel/conv/forward.cu)
+        kernel/types.cuh
+        kernel/util.cuh kernel/util.cu
+        kernel/math.cuh kernel/math.cu
+        kernel/ffn/forward.cuh kernel/ffn/forward.cu kernel/ffn/forward_wmma.cu
+        kernel/ffn/backward.cuh kernel/ffn/backward.cu kernel/ffn/backward_wmma.cu
+        kernel/conv/forward.cuh kernel/conv/forward.cu)
 
 set_target_properties(
         nn_math

@@ -17,7 +17,7 @@ use std::time::SystemTime;
 use soklyn::io::save::SafetensorFile;
 
 const BATCH_SIZE: usize = 200;
-const REGU_CONST: f32 = 0.0001;
+const REGU_COEFF: f32 = 0.0001;
 const CLAMP: f32 = f32::MAX;
 const EPSILON: f32 = 0.00000001;
 const TRAIN_ELEMENTS: u32 = 60000;
@@ -109,13 +109,13 @@ fn run_pipeline() -> Result<(), Error> {
 
 fn configure_layers(layers: &mut Vec<DenseBlock<f32>>) {
     layers[0].set_normalisation(LayerNorm);
-    layers[0].set_activation(LeakyReLU(0.01));
-    layers[0].set_regularisation(L2Regular(REGU_CONST));
+    layers[0].set_activation(LeakyReLU { coeff: 0.01 });
+    layers[0].set_regularisation(L2Regular { regu_coeff: REGU_COEFF });
     layers[0].set_mask_coeff(0.1);
 
     layers[1].set_normalisation(LayerNorm);
-    layers[1].set_activation(LeakyReLU(0.01));
-    layers[1].set_regularisation(L2Regular(REGU_CONST));
+    layers[1].set_activation(LeakyReLU { coeff: 0.01 });
+    layers[1].set_regularisation(L2Regular { regu_coeff: REGU_COEFF });
     layers[1].set_mask_coeff(0.3);
 
     layers[2].set_normalisation(Disabled);
@@ -166,7 +166,7 @@ fn train(
     let mut indices: Vec<usize> = (0..mnist.trn_img.len() / 784).collect();
     indices.shuffle(&mut rng());
 
-    let adam = Adam(0.9, 0.999, EPSILON);
+    let adam = Adam { m_coeff: 0.9, v_coeff: 0.999, epsilon: EPSILON };
     let total_batches = indices.chunks(BATCH_SIZE).len();
     let mut success = 0;
     let (mut forw_ms, mut loss_ms) = (0.0f64, 0.0f64);

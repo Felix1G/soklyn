@@ -1,52 +1,11 @@
 #pragma once
 
-#ifndef ACTIVATION_CU
-#define ACTIVATION_CU
+#ifndef UTIL_CU
+#define UTIL_CU
 
-#include "types.hpp"
-#include "math.cu"
+#include "util.cuh"
 
-__device__ __forceinline__ void cast_f32_f16_t(const f32_t *in, f16_t *out, const uint32_t len) {
-    if (const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < len) {
-        out[idx] = static_cast<f16_t>(in[idx]);
-    }
-}
-
-__device__ __forceinline__ void cast_f16_f32_t(const f16_t *in, f32_t *out, const uint32_t len) {
-    if (const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < len) {
-        out[idx] = static_cast<f32_t>(in[idx]);
-    }
-}
-
-__device__ __forceinline__ uint32_t dev_nchw_idx(
-    const uint32_t c, const uint32_t h, const uint32_t w,
-    const uint32_t ni, const uint32_t ci, const uint32_t hi, const uint32_t wi
-) {
-    return (ni * c + ci) * (h * w) + hi * w + wi;
-}
-
-/**
- * Tree-based parallel reduction: sums the entire shared_sum array into shared_sum[0].
- *
- * This is 1 dimensional, summing across the x-axis.
- */
-__device__ inline void dev_block_stride_sum_1d(f32_t *shared_sum) {
-    const uint32_t tid = threadIdx.x;
-    __syncthreads(); // ensure shared_sum has been fully written
-    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (tid < stride)
-            shared_sum[tid] += shared_sum[tid + stride];
-        __syncthreads();
-    }
-}
-
-/**
- * @param act The activation mode.
- * @param sum The value to be passed into the activation function.
- * @param leaky_relu_coeff A coefficient specially for the LeakyReLU activation function as a multiplier for negative values.
- * @return The result of the activation function.
- */
-__device__ inline f32_t dev_activation(const uint32_t act, const f32_t sum, const f32_t leaky_relu_coeff) {
+__device__ f32_t dev_activation(const uint32_t act, const f32_t sum, const f32_t leaky_relu_coeff) {
     f32_t new_sum = sum;
 
     switch (act) { // 5: Softmax (Called using softmax_kernel
@@ -87,16 +46,7 @@ __device__ inline f32_t dev_activation(const uint32_t act, const f32_t sum, cons
     return new_sum;
 }
 
-/**
- * @tparam T Either f32_t or f16_t.
- * @param act The activation mode.
- * @param err_delta The error delta before activation.
- * @param out_v The result from the activation function.
- * @param in_x The input of the activation function.
- * @param leaky_relu_coeff A coefficient specially for the LeakyReLU activation function as a multiplier for negative values.
- * @return The new error delta with activation.
- */
-__device__ inline f32_t dev_activation_derivative(
+__device__ f32_t dev_activation_derivative(
     const uint32_t act, const f32_t err_delta, const f32_t out_v, const f32_t in_x, const f32_t leaky_relu_coeff
 ) {
     f32_t err = err_delta;
@@ -142,16 +92,8 @@ __device__ inline f32_t dev_activation_derivative(
     return err;
 }
 
-/**
- * Applies the softmax activation function on the given matrix.
- * @tparam T Either f32_t or f16_t.
- * @param out The matrix where softmax will be applied per batch.
- * @param m The rows of the matrix (batch size).
- * @param n The columns of the matrix (features).
- */
-// threadIdx.x corresponds to m (each thread handles ONE batch of n features)
 template<typename T>
-__device__ inline void softmax_kernel(T *out, const uint32_t m, const uint32_t n) {
+__device__ void softmax_kernel(T *out, const uint32_t m, const uint32_t n) {
     const uint32_t row = blockIdx.x;
     if (row >= m) return;
 
@@ -231,23 +173,27 @@ __device__ inline void softmax_kernel(T *out, const uint32_t m, const uint32_t n
 }
 
 template<typename T>
-__device__ inline f32_t norm_derivative(
+__device__ void dev_write_norm_gradients(
+    f32_t *d_prenorm_out, f32_t *dNorm_w, f32_t *dNorm_b,
     const T * __restrict__ centered_out, const T * __restrict__ prenorm_out,
-    const f32_t rstd, const f32_t err_delta, const f32_t n_w, f32_t &dNorm_w_acc, f32_t &dNorm_b_acc,
-    const uint32_t norm, const uint32_t b_idx, const f32_t inv_n, const f32_t inv_m
+    const f32_t rstd, const f32_t err_delta, const f32_t n_w, const f32_t loss_scale,
+    const uint32_t norm, const uint32_t idx, const f32_t inv_n, const f32_t inv_m
 ) {
+    f32_t dNorm_w_acc = 0.0f;
+    f32_t dNorm_b_acc = 0.0f;
+
     f32_t d_prenorm = err_delta;
 
     if (norm == 1) {
         // RMSNorm
-        const f32_t pval = static_cast<f32_t>(prenorm_out[b_idx]);
+        const f32_t pval = static_cast<f32_t>(prenorm_out[idx]);
 
         dNorm_w_acc = err_delta * pval * rstd;
 
         d_prenorm = n_w * rstd * (err_delta - rstd * rstd * pval * pval * inv_n);
     } else if (norm == 2) {
         // LayerNorm
-        const f32_t cval = static_cast<f32_t>(centered_out[b_idx]);
+        const f32_t cval = static_cast<f32_t>(centered_out[idx]);
 
         dNorm_b_acc = err_delta;
         dNorm_w_acc = err_delta * cval * rstd;
@@ -255,32 +201,13 @@ __device__ inline f32_t norm_derivative(
         d_prenorm = n_w * rstd * (err_delta - err_delta * inv_n - rstd * rstd * cval * cval * err_delta * inv_n);
     } else if (norm == 3) {
         // BatchNorm
-        const f32_t cval = static_cast<f32_t>(centered_out[b_idx]);
+        const f32_t cval = static_cast<f32_t>(centered_out[idx]);
 
         dNorm_b_acc = err_delta;
         dNorm_w_acc = err_delta * cval * rstd;
 
         d_prenorm = n_w * rstd * (err_delta - err_delta * inv_m - rstd * rstd * cval * cval * err_delta * inv_m);
     }
-
-    return d_prenorm;
-}
-
-template<typename T>
-__device__ inline void dev_write_norm_gradients(
-    f32_t *d_prenorm_out, f32_t *dNorm_w, f32_t *dNorm_b,
-    const T * __restrict__ centered_out, const T * __restrict__ prenorm_out,
-    const f32_t rstd, const f32_t err_delta, const f32_t n_w, const f32_t loss_scale,
-    const uint32_t norm, const uint32_t idx,
-    const f32_t inv_n, const f32_t inv_m
-) {
-    f32_t dNorm_w_acc = 0.0f;
-    f32_t dNorm_b_acc = 0.0f;
-
-    const f32_t d_prenorm = norm_derivative<T>(
-        centered_out, prenorm_out, rstd, err_delta, n_w,
-        dNorm_w_acc, dNorm_b_acc, norm, idx, inv_n, inv_m
-    );
 
     d_prenorm_out[idx] = d_prenorm * loss_scale;
     dNorm_w[idx] = dNorm_w_acc;

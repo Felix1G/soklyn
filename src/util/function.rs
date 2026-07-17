@@ -14,18 +14,18 @@ pub enum Regularisation {
     /// weights in order to drive less important weights directly into `0.0`, which creates a
     /// simpler and sparser model.
     ///
-    /// The derivative formula is `w[i] -= L * sign(w[i])`.
+    /// The derivative formula is `w[i] -= regu_coeff * sign(w[i])`.
     ///
-    /// `L` is the regularisation coefficient.
-    L1Regular(f32),
+    /// `regu_coeff` is the regularisation coefficient.
+    L1Regular { regu_coeff: f32 },
     /// L2 Regularisation (Ridge). This adds a penalty proportional to the squared values of the
     /// weights, reducing them close to `0.0` without completely eliminating them. This is to
     /// prevent overfitting.
     ///
-    /// The derivative formula is `w[i] -= 2 * L * w[i]`.
+    /// The derivative formula is `w[i] -= 2 * regu_coeff * w[i]`.
     ///
-    /// `L` is the regularisation coefficient.
-    L2Regular(f32),
+    /// `regu_coeff` is the regularisation coefficient.
+    L2Regular { regu_coeff: f32 },
 }
 
 impl Regularisation {
@@ -33,8 +33,8 @@ impl Regularisation {
     pub(crate) fn ordinal(&self) -> usize {
         match self {
             Self::None => 0,
-            Self::L1Regular(_) => 1,
-            Self::L2Regular(_) => 2,
+            Self::L1Regular { regu_coeff: _ } => 1,
+            Self::L2Regular { regu_coeff: _ } => 2,
         }
     }
 }
@@ -79,27 +79,27 @@ pub enum Optimiser {
     /// exact opposite direction of the current batch's gradient, scaled by a learning rate.
     ///
     /// # Parameters
-    /// * `momentum coefficient` - The amount of 'friction' on the momentum. If set to `0.0`,
-    /// momentum is turned off and no data for momentum will be stored.
+    /// * `v_coeff` - The momentum coefficient which is the amount of 'friction' on the momentum.
+    /// If set to `0.0`, momentum is turned off and no data for momentum will be stored.
     /// * `nesterov` - If set to true, uses Nesterov Accelerated Gradient.
-    SGD(f32, bool),
+    SGD { v_coeff: f32, nesterov: bool },
 
     /// Adaptive optimisation algorithm that speeds up training by calculating
     /// unique learning rates for individual parameters based on a running combination of
     /// their average gradient direction (momentum) and their gradient variance (scaling factor).
     ///
     /// # Parameters
-    /// * `first moment coefficient` - The amount of 'friction' on the momentum.
-    /// * `second moment coefficient` - Controls how quickly past gradient magnitudes adapt.
+    /// * `m_coeff` - The first moment coefficient which is the amount of 'friction' on the momentum.
+    /// * `v_coeff` - The second moment coefficient which controls how quickly past gradient magnitudes adapt.
     /// * `epsilon` - A very small value to prevent zero division.
-    Adam(f32, f32, f32)
+    Adam { m_coeff: f32, v_coeff: f32, epsilon: f32 }
 }
 
 impl Optimiser {
     pub(crate) fn ordinal(&self) -> usize {
         match self {
-            SGD(_, _) => 0,
-            Adam(_, _, _) => 1,
+            SGD { v_coeff: _, nesterov: _ } => 0,
+            Adam { m_coeff: _, v_coeff: _, epsilon: _ } => 1,
         }
     }
 }
@@ -117,13 +117,13 @@ pub enum Activation {
     /// Recommended to use He initialisations.
     ReLU,
     /// Passes positive values through completely unchanged, while multiplying all negative values
-    /// by `alpha`.
+    /// by `coeff`.
     ///
     /// Recommended to use He initialisations.
     ///
     /// # Parameters
-    /// * `alpha` - LeakyReLU negative coefficient (`alpha * x`).
-    LeakyReLU(f32),
+    /// * `coeff` - LeakyReLU negative coefficient (`coeff * x`).
+    LeakyReLU { coeff: f32 },
     /// Squeezes any real-valued input into a smooth, continuous range between **-1.0 and 1.0**.
     Tanh,
     /// Converts the logits into a probability distribution, ensuring all outputs range between '0.0' and '1.0' (inclusive) and sum up to exactly '1.0'.
@@ -142,7 +142,7 @@ impl Activation {
             Self::Identity => 0,
             Self::Sigmoid => 1,
             Self::ReLU => 2,
-            Self::LeakyReLU(_) => 3,
+            Self::LeakyReLU { coeff: _ } => 3,
             Self::Tanh => 4,
             Self::Softmax => 5,
             Self::SiLU => 6,

@@ -1,10 +1,13 @@
 #pragma once
 
-#include "kernel/types.hpp"
+#include "kernel/types.cuh"
+#include "kernel/math.cuh"
 #include "kernel/math.cu"
+#include "kernel/util.cuh"
 #include "kernel/util.cu"
 #include "kernel/ffn/backward.cu"
 #include "kernel/ffn/backward_wmma.cu"
+#include "kernel/ffn/forward.cuh"
 #include "kernel/ffn/forward.cu"
 #include "kernel/ffn/forward_wmma.cu"
 #include "kernel/conv/forward.cu"

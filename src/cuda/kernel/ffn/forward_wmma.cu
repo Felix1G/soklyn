@@ -3,12 +3,13 @@
 #ifndef FFN_FORWARD_WMMA_CU
 #define FFN_FORWARD_WMMA_CU
 
-#include "../math.cu"
+#include "forward.cuh"
 #include <mma.h>
+
 using namespace nvcuda::wmma;
 
 #if __CUDA_ARCH__ >= 700
-__device__ inline void forward_pass_0_wmma_kernel(
+__device__ void forward_pass_0_wmma_kernel(
     f16_t* prenorm_out, const f16_t* in, const f16_t* w, const f16_t* b,
     const uint32_t use_bias, const uint32_t m, const uint32_t n, const uint32_t wc
 ) {

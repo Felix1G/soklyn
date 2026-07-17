@@ -1,8 +1,11 @@
-use cudarc::driver::{LaunchConfig, PushKernelArg};
-use crate::io::device::GpuContext;
-use crate::{Activation, DenseBlock, LossFunc, Normalisation, Optimiser, Precision, PrecisionType, Regularisation};
 use crate::core::{scramble_seed, Tensor2D};
+use crate::io::device::GpuContext;
 use crate::log::Error;
+use crate::{
+    Activation, DenseBlock, LossFunc, Normalisation, Optimiser, Precision, PrecisionType,
+    Regularisation,
+};
+use cudarc::driver::{LaunchConfig, PushKernelArg};
 
 impl GpuContext {
     pub(crate) fn gpu_forward_pass<T: PrecisionType>(
@@ -23,7 +26,7 @@ impl GpuContext {
         let use_bias = *norm != Normalisation::BatchNorm;
 
         let leaky_relu_coeff = match act {
-            Activation::LeakyReLU(value) => *value,
+            Activation::LeakyReLU { coeff } => *coeff,
             _ => 0.0,
         };
 
@@ -148,7 +151,7 @@ impl GpuContext {
         let act_mode_u32 = activation.ordinal() as u32;
 
         let leaky_relu_coeff = match activation {
-            Activation::LeakyReLU(value) => value,
+            Activation::LeakyReLU { coeff } => coeff,
             _ => 0.0,
         };
 
@@ -247,8 +250,15 @@ impl GpuContext {
         let step_u32 = step as u32;
 
         let extract_optimiser_info = |optimiser: &Optimiser| match optimiser {
-            Optimiser::SGD(b1, nest) => (*b1, 0.0, 0.0, if *nest { 1 } else { 0 }),
-            Optimiser::Adam(b1, b2, eps) => (*b1, *b2, *eps, 0),
+            Optimiser::SGD {
+                v_coeff: b1,
+                nesterov,
+            } => (*b1, 0.0, 0.0, if *nesterov { 1 } else { 0 }),
+            Optimiser::Adam {
+                m_coeff: b1,
+                v_coeff: b2,
+                epsilon,
+            } => (*b1, *b2, *epsilon, 0),
         };
 
         let (linear_beta1, linear_beta2, linear_epsilon, linear_nesterov) =
@@ -258,8 +268,8 @@ impl GpuContext {
 
         let regu_coeff = match regularisation {
             Regularisation::None => 0.0,
-            Regularisation::L1Regular(coeff) => *coeff,
-            Regularisation::L2Regular(coeff) => *coeff,
+            Regularisation::L1Regular { regu_coeff } => *regu_coeff,
+            Regularisation::L2Regular { regu_coeff } => *regu_coeff,
         };
 
         let mut builder = self.stream.launch_builder(match T::precision() {
@@ -368,7 +378,7 @@ impl GpuContext {
         let act_mode_u32 = activation.ordinal() as u32;
 
         let leaky_relu_coeff = match activation {
-            Activation::LeakyReLU(value) => *value,
+            Activation::LeakyReLU { coeff } => *coeff,
             _ => 0.0,
         };
 

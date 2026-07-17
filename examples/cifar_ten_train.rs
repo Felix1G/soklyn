@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use half::f16;
 use rand::prelude::SliceRandom;
 use rand::rng;
-use soklyn::{DenseBlock, InitFunc, InitHeNormalFunc};
+use soklyn::{DenseBlock, InitFunc, InitHeNormalFunc, Regularisation};
 use soklyn::Activation::{Identity, Mish, Softmax};
 use soklyn::core::Tensor2D;
 use soklyn::io::device::GpuContext;
@@ -126,12 +126,12 @@ fn run_pipeline() -> Result<(), Error> {
 
 fn configure_layers(layers: &mut Vec<DenseBlock<Precision>>) {
     let settings = [
-        (BatchNorm, Mish, L2Regular(0.0001), 0.4),
-        (BatchNorm, Mish, L2Regular(0.0001), 0.4),
-        (BatchNorm, Mish, L2Regular(0.0001), 0.25),
-        (BatchNorm, Mish, L2Regular(0.0001), 0.2),
-        (Disabled, Identity, L2Regular(0.0), 0.0),
-        (Disabled, Identity, L2Regular(0.0), 0.0),
+        (BatchNorm, Mish, L2Regular { regu_coeff: 0.0001 }, 0.4),
+        (BatchNorm, Mish, L2Regular { regu_coeff: 0.0001 }, 0.4),
+        (BatchNorm, Mish, L2Regular { regu_coeff: 0.0001 }, 0.25),
+        (BatchNorm, Mish, L2Regular { regu_coeff: 0.0001 }, 0.2),
+        (Disabled, Identity, Regularisation::None, 0.0),
+        (Disabled, Identity, Regularisation::None, 0.0),
     ];
 
     for (idx, &(norm, act, reg, mask)) in settings.iter().enumerate() {
@@ -190,7 +190,7 @@ fn train(
     let mut indices: Vec<usize> = (0..cifar.trn_img.len() / IMG_SIZE).collect();
     indices.shuffle(&mut rng());
 
-    let adam = Adam(0.9, 0.999, EPSILON);
+    let adam = Adam { m_coeff: 0.9, v_coeff: 0.999, epsilon: EPSILON };
     let total_batches = indices.chunks(BATCH_SIZE).len();
     let mut success1 = 0;
     let mut success2 = 0;

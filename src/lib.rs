@@ -68,9 +68,9 @@ mod tests {
         // The activation of the last layer (the output layer) must be set to Identity
         let layers: Vec<DenseBlock<f32>> = vec![
             DenseBlock::new(&context, true, 32, 16, BATCH_SIZE, &mut init,
-                            Normalisation::Disabled, Activation::LeakyReLU(0.01), Regularisation::None, 0.1)?,
+                            Normalisation::Disabled, Activation::LeakyReLU { coeff: 0.01 }, Regularisation::None, 0.1)?,
             DenseBlock::new(&context, true, 16, 8, BATCH_SIZE, &mut init,
-                            Normalisation::Disabled, Activation::LeakyReLU(0.01), Regularisation::None, 0.1)?,
+                            Normalisation::Disabled, Activation::LeakyReLU  { coeff: 0.01 }, Regularisation::None, 0.1)?,
             DenseBlock::new(&context, true, 8, 4, BATCH_SIZE, &mut init,
                             Normalisation::Disabled, Activation::Identity, Regularisation::None, 0.1)?,
         ];
@@ -82,7 +82,7 @@ mod tests {
         // Here, the input tensor takes size (BATCH SIZE, 32) since there are 32 input neurons.
         // Whereas, the target tensor takes size (BATCH SIZE, 4) since there are 4 output neurons.
         let input = &gen_input(&context); // This is the input to your network
-        let sgd = SGD(0.9, true); // Stochastic Gradient Descent with Nesterov momentum
+        let sgd = SGD { v_coeff: 0.9, nesterov: true }; // Stochastic Gradient Descent with Nesterov momentum
         let outputs = network.forward(&context, &input, BATCH_SIZE, true, 1)?;
         network.backward(&context, &outputs, &gen_target(&context), &input,
                          LossFunc::CrossEntropyLoss, Activation::Softmax, BATCH_SIZE,

@@ -130,7 +130,7 @@ fn train(
     let mut indices: Vec<usize> = (0..mnist.trn_img.len() / 784).collect();
     indices.shuffle(&mut rng());
 
-    let adam = Adam(0.9, 0.999, EPSILON);
+    let adam = Adam { m_coeff: 0.9, v_coeff: 0.999, epsilon: EPSILON };
     let total_batches = indices.chunks(BATCH_SIZE).len();
     let (mut forw_ms, mut loss_ms) = (0.0f64, 0.0f64);
 

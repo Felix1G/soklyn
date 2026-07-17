@@ -1,9 +1,8 @@
 use crate::core::{scramble_seed, Tensor4D};
 use crate::io::device::GpuContext;
 use crate::log::Error;
-use crate::{Activation, ConvBlock, KernelConfig, Normalisation, Precision, PrecisionType};
+use crate::{Activation, ConvBlock, Normalisation, Precision, PrecisionType};
 use cudarc::driver::{LaunchConfig, PushKernelArg};
-use crate::PoolingType::NoPooling;
 
 impl GpuContext {
     /// For `auto_pad`, it is incorporated into `ow` and `oh` such that the width/height purposely
@@ -46,13 +45,13 @@ impl GpuContext {
 
         let filter_weights = cur_layer.get_filter_weights();
         let leaky_relu_coeff = match act {
-            Activation::LeakyReLU(value) => *value,
+            Activation::LeakyReLU { coeff: alpha } => *alpha,
             _ => 0.0,
         };
 
         let use_bias_u32 = use_bias as u32;
         let n_u32 = input.batches() as u32;
-        let mut ic_u32 = input.channels() as u32;
+        let ic_u32 = input.channels() as u32;
         let mut iw_u32 = input.width() as u32;
         let mut ih_u32 = input.height() as u32;
         let mut oc_u32 = output.channels() as u32;

@@ -20,7 +20,8 @@ fn stress_test_forward(context: &GpuContext, init: &mut InitHeUniformFunc) -> Re
         &context, true, 64, &(500, 500), init,
         KernelConfig::new((80, 80), 1, PaddingType::ZeroPadding, (1, 1), (1, 1))?,
         KernelConfig::disable(), PoolingType::NoPooling,
-        5, 40, Activation::Mish, Normalisation::Disabled, Regularisation::L2Regular(0.2), 0.1
+        5, 40, Mish, Normalisation::Disabled,
+        Regularisation::L2Regular { regu_coeff: 0.2 }, 0.1
     )?;
 
     let input = Tensor4D::zeros(context, &[64, 5, 500, 500])?;

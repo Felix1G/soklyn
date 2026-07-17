@@ -3,14 +3,13 @@
 #ifndef FFN_BACKWARD_WMMA_CU
 #define FFN_BACKWARD_WMMA_CU
 
-#include "../math.cu"
-#include "../util.cu"
+#include "../math.cuh"
+#include "../util.cuh"
 #include <mma.h>
 using namespace nvcuda::wmma;
 
 #if __CUDA_ARCH__ >= 700
-
-__device__ inline void compute_hidden_layer_error_wmma_kernel(
+__device__ void compute_hidden_layer_error_wmma_kernel(
     const f32_t* next_d_prenorm_out, const f32_t* master_w_next, const f32_t* master_norm_w,
     f32_t* dx_out, f32_t* d_prenorm_out, f32_t* dNorm_w, f32_t* dNorm_b,
     const f16_t* norm_rstd, const f16_t* centered_out, const f16_t* prenorm_out,
@@ -97,7 +96,6 @@ __device__ inline void compute_hidden_layer_error_wmma_kernel(
         );
     }
 }
-
 #endif
 
 #endif
