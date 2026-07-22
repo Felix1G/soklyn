@@ -1,12 +1,15 @@
+use cudarc::driver::CudaSlice;
 use crate::core::{Tensor1D, Tensor2D, Tensor4D};
 use crate::io::device::GpuContext;
 use crate::log::Error;
-use crate::r#type::CastPrecision;
+use crate::r#type::{generate_twiddle_lut, CastPrecision};
 use crate::Activation::Identity;
+use crate::ConvAlgorithm::FrequencyFFT;
 use crate::Normalisation::Disabled;
-use crate::{getter, getter_copy, setter, Activation, KernelConfig, InitFunc, Normalisation, PrecisionType, Regularisation, getter_option, PoolingType, LossFunc};
-use half::f16;
 use crate::PoolingType::{MaxPooling, NoPooling};
+use crate::{getter, getter_copy, getter_option, setter, Activation, Complex32, ConvAlgorithm, InitFunc, KernelConfig, LossFunc, Normalisation, PoolingType, PrecisionType, Regularisation};
+use half::f16;
+use ConvAlgorithm::Spatial;
 
 pub(crate) struct ConvForwardCache<T: PrecisionType> {
     features: Tensor4D<T>,
@@ -92,26 +95,40 @@ impl<T: PrecisionType> ConvNormCache<T> {
 /// `Input` -> `Filter Weights` -> `Filter Biases` -> `Normalisation` -> `Activation` ->
 /// `Pooling` -> `Mask (dropout)` -> `Output`
 pub struct ConvBlock<T: PrecisionType> {
+    algorithm: ConvAlgorithm,
     forward_cache: ConvForwardCache<T>,
+
     filter_weights: Tensor4D<T>,
     filter_biases: Tensor1D<T>,
     filter_cfg: KernelConfig,
+
     pooling_cfg: KernelConfig,
     pooling_type: PoolingType,
+
     norm_cache: Option<ConvNormCache<T>>,
     mask: Tensor4D<T>,
+
     max_batch_size: usize,
     max_input_dim: (usize, usize),
+
     is_training: bool,
+
     normalisation: Normalisation,
     activation: Activation,
     regularisation: Regularisation,
     mask_coeff: f32,
+
+    fft_input: Option<CudaSlice<Complex32>>,
+    fft_weights: Option<CudaSlice<Complex32>>,
+
+    twiddle_lut_w: Option<CudaSlice<Complex32>>,
+    twiddle_lut_h: Option<CudaSlice<Complex32>>,
+    twiddle_last_size: (usize, usize) // used to detect change in input size, which causes a regeneration of the twiddle look up table
 }
 
 impl<T: PrecisionType> ConvBlock<T> {
     /// Create a new convolutional block with default arguments, including setting
-    /// activation to [`Identity`], regularisation to [`Regularisation::None`],
+    /// the algorithm to [`Spatial`], activation to [`Identity`], regularisation to [`Regularisation::None`],
     /// pooling type to [`NoPooling`], and `mask_coeff` to `0.0`.
     ///
     /// # Arguments
@@ -139,6 +156,7 @@ impl<T: PrecisionType> ConvBlock<T> {
     ) -> Result<Self, Error> {
         Self::new(
             context,
+            Spatial,
             is_training,
             max_batch_size,
             max_input_dim,
@@ -175,6 +193,7 @@ impl<T: PrecisionType> ConvBlock<T> {
     /// * `mask_coeff` - Mask coefficient for dropout.
     pub fn new<I: InitFunc>(
         context: &GpuContext,
+        algorithm: ConvAlgorithm,
         is_training: bool,
         max_batch_size: usize,
         max_input_dim: &(usize, usize),
@@ -241,8 +260,29 @@ impl<T: PrecisionType> ConvBlock<T> {
             filter_out_dim.0,
         ];
 
+        let full_input_size = filter_cfg.padded_length(&max_input_dim);
+        let fft_output_size = (full_input_size.0.next_power_of_two(), full_input_size.1.next_power_of_two());
+        let fft_total_elems_chw = in_channels * fft_output_size.0 * fft_output_size.1;
+
+        if algorithm == FrequencyFFT {
+            if !full_input_size.0.is_power_of_two() {
+                log::warn!(
+                    "Algorithm is set to FFT, but full maximum input width ({}) is not a power of 2. Internal math will pad the width to {}.",
+                    full_input_size.0, fft_output_size.0
+                );
+            }
+
+            if !full_input_size.1.is_power_of_two() {
+                log::warn!(
+                    "Algorithm is set to FFT, but full maximum input height ({}) is not a power of 2. Internal math will pad the height to {}.",
+                    full_input_size.1, fft_output_size.1
+                );
+            }
+        }
+
         Self::from_tensors(
             is_training,
+            algorithm,
             ConvForwardCache::new(
                 context,
                 &filter_out_shape,
@@ -275,11 +315,22 @@ impl<T: PrecisionType> ConvBlock<T> {
             normalisation,
             regularisation,
             mask_coeff,
+            if algorithm == FrequencyFFT {
+                Some(context.get_stream().alloc_zeros::<Complex32>(max_batch_size * fft_total_elems_chw)?)
+            } else {
+                None
+            },
+            if algorithm == FrequencyFFT {
+                Some(context.get_stream().alloc_zeros::<Complex32>(out_channels * fft_total_elems_chw)?)
+            } else {
+                None
+            }
         )
     }
 
     pub(crate) fn from_tensors(
         is_training: bool,
+        algorithm: ConvAlgorithm,
         forward_cache: ConvForwardCache<T>,
         filter_weights: Tensor4D<T>,
         filter_biases: Tensor1D<T>,
@@ -294,8 +345,11 @@ impl<T: PrecisionType> ConvBlock<T> {
         normalisation: Normalisation,
         regularisation: Regularisation,
         mask_coeff: f32,
+        fft_input: Option<CudaSlice<Complex32>>,
+        fft_weights: Option<CudaSlice<Complex32>>,
     ) -> Result<Self, Error> {
         Ok(Self {
+            algorithm,
             forward_cache,
             filter_weights,
             filter_biases,
@@ -311,6 +365,11 @@ impl<T: PrecisionType> ConvBlock<T> {
             normalisation,
             regularisation,
             mask_coeff,
+            fft_input,
+            fft_weights,
+            twiddle_lut_w: None,
+            twiddle_lut_h: None,
+            twiddle_last_size: (0, 0)
         })
     }
 
@@ -325,6 +384,7 @@ impl<T: PrecisionType> ConvBlock<T> {
     getter!(pub get_mask, mask, Tensor4D<T>);
 
     // Getting configurations
+    getter!(pub get_algorithm, algorithm, ConvAlgorithm);
     getter!(pub get_filter_cfg, filter_cfg, KernelConfig);
     getter_option!(pub get_pooling_cfg, pooling_cfg, KernelConfig);
     getter_copy!(pub get_max_batch_size, max_batch_size, usize);
@@ -336,6 +396,12 @@ impl<T: PrecisionType> ConvBlock<T> {
     getter!(pub get_regularisation, regularisation, Regularisation);
     setter!(pub set_regularisation, regularisation, Regularisation);
     getter_copy!(pub is_training_mode, is_training, bool);
+
+    // FFT cache
+    getter_option!(pub get_fft_input, fft_input, Option<CudaSlice<Complex32>>);
+    getter_option!(pub get_fft_weights, fft_weights, Option<CudaSlice<Complex32>>);
+    getter_option!(pub get_twiddle_lut_width, twiddle_lut_w, Option<CudaSlice<Complex32>>);
+    getter_option!(pub get_twiddle_lut_height, twiddle_lut_h, Option<CudaSlice<Complex32>>);
 
     /// Note: if no pooling configuration was specified, this function will always return [`NoPooling`].
     pub fn get_pooling_type(&self) -> PoolingType {
@@ -377,21 +443,20 @@ impl<T: PrecisionType> ConvBlock<T> {
             });
         }
 
-        let weight_width = self.filter_weights.width();
-        let weight_height = self.filter_weights.height();
+        let output_size = self.filter_cfg.elements_from_length(&(input.width(), input.height()));
 
-        if input.width() == 0 || input.width() < weight_width {
+        if input.width() == 0 || output_size.0 == 0 {
             return Err(Error::MismatchedDimensions {
-                reason: "forward input width is smaller than filter width or zero",
-                expected: weight_width,
+                reason: "forward input width is too small or zero",
+                expected: self.filter_cfg.actual_width() - 2 * self.filter_cfg.get_pad(),
                 found: input.width(),
             });
         }
 
-        if input.height() == 0 || input.height() < weight_height {
+        if input.height() == 0 || output_size.1 == 0 {
             return Err(Error::MismatchedDimensions {
-                reason: "forward input height is smaller than filter height or zero",
-                expected: weight_height,
+                reason: "forward input height is too small or zero",
+                expected: self.filter_cfg.actual_height() - 2 * self.filter_cfg.get_pad(),
                 found: input.height(),
             });
         }
@@ -463,7 +528,7 @@ impl<T: PrecisionType> ConvBlock<T> {
     /// * [`Error::DriverError`] - An asynchronous hardware or synchronisation failure occurs while launching or executing
     ///   the forward inference math kernels on the GPU driver.
     pub fn forward(
-        &self,
+        &mut self,
         context: &GpuContext,
         input: &Tensor4D<T>,
         batch_size: usize,
@@ -471,6 +536,38 @@ impl<T: PrecisionType> ConvBlock<T> {
         step: usize,
     ) -> Result<&Tensor4D<T>, Error> {
         self.check_input_dimension(input, batch_size)?;
+
+        let full_input_size = self.filter_cfg.padded_length(&(input.width(), input.height()));
+        let fft_output_size = (full_input_size.0.next_power_of_two(), full_input_size.1.next_power_of_two());
+
+        if self.algorithm == FrequencyFFT {
+            if !full_input_size.0.is_power_of_two() {
+                log::warn!(
+                    "Algorithm is set to FFT, but full input width ({}) is not a power of 2. Internal math will pad the width to {}.",
+                    full_input_size.0, fft_output_size.0
+                );
+            }
+
+            if !full_input_size.1.is_power_of_two() {
+                log::warn!(
+                    "Algorithm is set to FFT, but full input height ({}) is not a power of 2. Internal math will pad the height to {}.",
+                    full_input_size.1, fft_output_size.1
+                );
+            }
+
+            // 16 because in the kernel code, MAX_ITEMS is 8 for 2 arrays (even and odd), hence 2 * 8 = 16
+            // This error is raised as in the cooley-tukey function, a register array is set with static size of MAX_ITEMS.
+            // Hence, only that many elements can fit both arrays, which is determined also from tile dimensions in gpu context.
+            let max_freq_map_size = 16 * context.get_tile_dim_2() as usize;
+            if fft_output_size.0 > max_freq_map_size ||
+                fft_output_size.1 > max_freq_map_size {
+                return Err(Error::AllocationLimitExceeded {
+                    reason: "frequency map exceeds size limit",
+                    max: max_freq_map_size,
+                    received: fft_output_size.0.max(fft_output_size.1),
+                })
+            }
+        }
 
         if self.activation == Activation::Softmax {
             return Err(Error::InvalidConfiguration {
@@ -491,9 +588,23 @@ impl<T: PrecisionType> ConvBlock<T> {
             });
         }
 
+        // regenerate twiddle look up table
+        if self.twiddle_last_size != fft_output_size {
+            if self.algorithm == FrequencyFFT {
+                let twiddle_lut_w_vec = generate_twiddle_lut(fft_output_size.0);
+                let twiddle_lut_h_vec = generate_twiddle_lut(fft_output_size.1);
+
+                self.twiddle_lut_w = Some(context.get_stream().clone_htod(&twiddle_lut_w_vec)?);
+                self.twiddle_lut_h = Some(context.get_stream().clone_htod(&twiddle_lut_h_vec)?);
+            }
+
+            self.twiddle_last_size = fft_output_size;
+        }
+
         context.gpu_conv_forward_pass(
             &self,
             input,
+            &fft_output_size,
             batch_size,
             use_dropout,
             step
@@ -529,7 +640,7 @@ impl<T: PrecisionType> ConvBlock<T> {
         act_mode: Activation,
     ) -> Result<(), Error> {
         if !self.is_training {
-            return Err(Error::TrainingModeRequired("compute loss"));
+            return Err(Error::TrainingModeRequired { reason: "compute loss" });
         }
 
         if target.height() != self.forward_cache.features.height() {
@@ -595,6 +706,7 @@ impl<T: PrecisionType> ConvBlock<T> {
 
     fn cast<U: PrecisionType>(self, context: &GpuContext) -> Result<ConvBlock<U>, Error> {
         Ok(ConvBlock::<U> {
+            algorithm: self.algorithm,
             filter_weights: self.filter_weights.cast(context)?,
             filter_biases: self.filter_biases.cast(context)?,
             forward_cache: self.forward_cache.cast(context)?,
@@ -614,6 +726,11 @@ impl<T: PrecisionType> ConvBlock<T> {
             activation: self.activation,
             regularisation: self.regularisation,
             mask_coeff: self.mask_coeff,
+            fft_input: self.fft_input,
+            fft_weights: self.fft_weights,
+            twiddle_lut_w: self.twiddle_lut_w,
+            twiddle_lut_h: self.twiddle_lut_h,
+            twiddle_last_size: self.twiddle_last_size,
         })
     }
 }

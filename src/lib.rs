@@ -84,6 +84,7 @@ mod tests {
         let input = &gen_input(&context); // This is the input to your network
         let sgd = SGD { v_coeff: 0.9, nesterov: true }; // Stochastic Gradient Descent with Nesterov momentum
         let outputs = network.forward(&context, &input, BATCH_SIZE, true, 1)?;
+
         network.backward(&context, &outputs, &gen_target(&context), &input,
                          LossFunc::CrossEntropyLoss, Activation::Softmax, BATCH_SIZE,
                          &[sgd, sgd, sgd], &[sgd, sgd, sgd], 0.01, f32::MAX, 1)?;

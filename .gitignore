@@ -2,9 +2,8 @@
 network.safetensors
 network1.safetensors
 assets/data
-assets/.idea
-assets/cmake-build-debug
 src/cuda/.idea
 src/cuda/cmake-build-debug
 .idea
 learningpoints.txt
+.scratch

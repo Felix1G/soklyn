@@ -618,7 +618,7 @@ impl<T: PrecisionType> DenseBlock<T> {
         step: usize,
     ) -> Result<(), Error> {
         if !self.is_training {
-            return Err(Error::TrainingModeRequired("output layer backward pass"));
+            return Err(Error::TrainingModeRequired { reason: "output layer backward pass" });
         }
 
         self.check_input_dimension(input, batch_size)?;
@@ -698,7 +698,7 @@ impl<T: PrecisionType> DenseBlock<T> {
         step: usize,
     ) -> Result<(), Error> {
         if !self.is_training {
-            return Err(Error::TrainingModeRequired("hidden layer backward pass"));
+            return Err(Error::TrainingModeRequired { reason: "hidden layer backward pass" });
         }
 
         self.check_input_dimension(input, batch_size)?;
@@ -714,9 +714,9 @@ impl<T: PrecisionType> DenseBlock<T> {
         }
 
         let next_grad_rows = next_layer.get_grads().rows();
-        if next_grad_rows != input.rows() {
+        if next_grad_rows < input.rows() {
             return Err(Error::MismatchedDimensions {
-                reason: "backward pass activation gradient vs batch rows mismatch",
+                reason: "backward pass activation gradient rows should be more than or equal to batch rows",
                 expected: input.rows(),
                 found: next_grad_rows,
             });
@@ -779,7 +779,7 @@ impl<T: PrecisionType> DenseBlock<T> {
         act_mode: Activation,
     ) -> Result<(), Error> {
         if !self.is_training {
-            return Err(Error::TrainingModeRequired("compute loss"));
+            return Err(Error::TrainingModeRequired { reason: "compute loss" });
         }
 
         if target.cols() != self.linear_state.w.cols() {

@@ -1,7 +1,7 @@
 use crate::core::{scramble_seed, Tensor2D, Tensor4D};
 use crate::io::device::GpuContext;
 use crate::log::Error;
-use crate::{Activation, ConvBlock, DenseBlock, LossFunc, Normalisation, Precision, PrecisionType};
+use crate::{Activation, Complex32, ConvAlgorithm, ConvBlock, DenseBlock, LossFunc, Normalisation, Precision, PrecisionType};
 use cudarc::driver::{LaunchConfig, PushKernelArg};
 
 impl GpuContext {
@@ -15,6 +15,7 @@ impl GpuContext {
         &self,
         cur_layer: &ConvBlock<T>,
         input: &Tensor4D<T>,
+        fft_output_size: &(usize, usize),
         batch_size: usize,
         use_dropout: bool,
         step: usize,
@@ -52,11 +53,16 @@ impl GpuContext {
         let use_bias_u32 = use_bias as u32;
         let n_u32 = input.batches() as u32;
         let ic_u32 = input.channels() as u32;
+
         let mut iw_u32 = input.width() as u32;
         let mut ih_u32 = input.height() as u32;
+
+        // the `output` is the result of filtering
+        let o_size = f_cfg.elements_from_length(&(input.width(), input.height()));
+        let mut ow_u32 = o_size.0 as u32;
+        let mut oh_u32 = o_size.1 as u32;
         let mut oc_u32 = output.channels() as u32;
-        let mut ow_u32 = output.width() as u32;
-        let mut oh_u32 = output.height() as u32;
+
         let fw_u32 = filter_weights.width() as u32;
         let fh_u32 = filter_weights.height() as u32;
         let f_pad_u32 = f_cfg.get_pad() as u32;
@@ -70,48 +76,113 @@ impl GpuContext {
         let pool_mode_u32 = pool_mode.ordinal() as u32;
         let use_dropout_u32 = use_dropout as u32;
 
-        let mut builder = self.stream.launch_builder(match T::precision() {
-            Precision::FP32 => &self.conv_forward_pass_func0.0,
-            Precision::FP16 => &self.conv_forward_pass_func0.1,
-        });
+        match cur_layer.get_algorithm() {
+            ConvAlgorithm::Spatial => {
+                let mut builder = self.stream.launch_builder(match T::precision() {
+                    Precision::FP32 => &self.conv_forward_pass_func0.0,
+                    Precision::FP16 => &self.conv_forward_pass_func0.1,
+                });
 
-        builder
-            .arg(output.get_data())
-            .arg(input.get_data())
-            .arg(filter_weights.get_data())
-            .arg(cur_layer.get_filter_biases().get_data())
-            .arg(&use_bias_u32)
-            .arg(&ic_u32)
-            .arg(&oc_u32)
-            .arg(&iw_u32)
-            .arg(&ih_u32)
-            .arg(&ow_u32)
-            .arg(&oh_u32)
-            .arg(&fw_u32)
-            .arg(&fh_u32)
-            .arg(&f_pad_u32)
-            .arg(&f_pad_mode_u32)
-            .arg(&f_stride_x_u32)
-            .arg(&f_stride_y_u32)
-            .arg(&f_dilation_x_u32)
-            .arg(&f_dilation_y_u32);
+                builder
+                    .arg(output.get_data())
+                    .arg(input.get_data())
+                    .arg(filter_weights.get_data())
+                    .arg(cur_layer.get_filter_biases().get_data())
+                    .arg(&use_bias_u32)
+                    .arg(&ic_u32)
+                    .arg(&oc_u32)
+                    .arg(&iw_u32)
+                    .arg(&ih_u32)
+                    .arg(&ow_u32)
+                    .arg(&oh_u32)
+                    .arg(&fw_u32)
+                    .arg(&fh_u32)
+                    .arg(&f_pad_u32)
+                    .arg(&f_pad_mode_u32)
+                    .arg(&f_stride_x_u32)
+                    .arg(&f_stride_y_u32)
+                    .arg(&f_dilation_x_u32)
+                    .arg(&f_dilation_y_u32);
 
-        let tile_h = (self.tile_dim - 1) * f_stride.1 as u32 + f_cfg.actual_height() as u32;
-        let tile_w = (self.tile_dim - 1) * f_stride.0 as u32 + f_cfg.actual_width() as u32;
+                let tile_h = (self.tile_dim - 1) * f_stride.1 as u32 + f_cfg.actual_height() as u32;
+                let tile_w = (self.tile_dim - 1) * f_stride.0 as u32 + f_cfg.actual_width() as u32;
 
-        let cfg = self.calculate_cfg4d(
-            n_u32 as usize,
-            oc_u32 as usize,
-            oh_u32 as usize,
-            ow_u32 as usize,
-            tile_w * tile_h * size_of::<T>() as u32,
-        );
+                let cfg = self.calculate_cfg4d(
+                    n_u32 as usize,
+                    oc_u32 as usize,
+                    oh_u32 as usize,
+                    ow_u32 as usize,
+                    tile_w * tile_h * size_of::<T>() as u32,
+                );
 
-        unsafe {
-            builder.launch(cfg)?;
+                unsafe {
+                    builder.launch(cfg)?;
+                }
+
+                self.stream.synchronize()?;
+            }
+            ConvAlgorithm::FrequencyFFT => {
+                let fft_ow_u32 = fft_output_size.0 as u32;
+                let fft_oh_u32 = fft_output_size.1 as u32;
+
+                let mut row_builder = self.stream.launch_builder(match T::precision() {
+                    Precision::FP32 => &self.conv_fft_row_transform_func.0,
+                    Precision::FP16 => &self.conv_fft_row_transform_func.1,
+                });
+
+                row_builder
+                    .arg(cur_layer.get_fft_input().unwrap())
+                    .arg(cur_layer.get_fft_weights().unwrap())
+                    .arg(cur_layer.get_twiddle_lut_width().unwrap())
+                    .arg(input.get_data())
+                    .arg(filter_weights.get_data())
+                    .arg(&n_u32)
+                    .arg(&ic_u32)
+                    .arg(&iw_u32)
+                    .arg(&ih_u32)
+                    .arg(&fft_ow_u32)
+                    .arg(&fft_oh_u32)
+                    .arg(&fw_u32)
+                    .arg(&fh_u32)
+                    .arg(&f_pad_u32)
+                    .arg(&f_pad_mode_u32)
+                    .arg(&f_dilation_x_u32)
+                    .arg(&f_dilation_y_u32);
+
+                let cfg = LaunchConfig {
+                    grid_dim: ((n_u32 + oc_u32) * ic_u32 * fft_oh_u32, 1, 1, ),
+                    block_dim: (self.tile_dim_2, 1, 1),
+                    shared_mem_bytes: fft_ow_u32 * size_of::<Complex32>() as u32,
+                };
+
+                unsafe {
+                    row_builder.launch(cfg)?;
+                }
+
+                let mut col_builder = self.stream.launch_builder(
+                    &self.conv_fft_col_transform_func
+                );
+
+                col_builder
+                    .arg(cur_layer.get_fft_input().unwrap())
+                    .arg(cur_layer.get_fft_weights().unwrap())
+                    .arg(cur_layer.get_twiddle_lut_height().unwrap())
+                    .arg(&n_u32)
+                    .arg(&ic_u32)
+                    .arg(&fft_ow_u32)
+                    .arg(&fft_oh_u32);
+
+                let cfg = LaunchConfig {
+                    grid_dim: ((n_u32 + oc_u32) * ic_u32 * fft_ow_u32, 1, 1, ),
+                    block_dim: (self.tile_dim_2, 1, 1),
+                    shared_mem_bytes: fft_oh_u32 * size_of::<Complex32>() as u32,
+                };
+
+                unsafe {
+                    col_builder.launch(cfg)?;
+                }
+            }
         }
-
-        self.stream.synchronize()?;
 
         if allow_pass_1 {
             let norm_cache = cur_layer.get_norm_cache().unwrap();
@@ -161,11 +232,17 @@ impl GpuContext {
         // === ACTIVATION, POOLING, DROPOUT ===
         if allow_pass_2 {
             let features = cur_layer.get_features();
+
+            // the 'input' now is the result of the filter/normalisation
             iw_u32 = ow_u32;
             ih_u32 = oh_u32;
+
+            // the `output` now is the result of pooling
+            let o_size = p_cfg.elements_from_length(&(iw_u32 as usize, ih_u32 as usize));
+            ow_u32 = o_size.0 as u32;
+            oh_u32 = o_size.1 as u32;
             oc_u32 = features.channels() as u32;
-            ow_u32 = features.width() as u32;
-            oh_u32 = features.height() as u32;
+
             let pw_u32 = p_cfg.get_dimension().0 as u32;
             let ph_u32 = p_cfg.get_dimension().1 as u32;
             let p_pad_u32 = p_cfg.get_pad() as u32;

@@ -6,14 +6,44 @@
 #include "../util.cuh"
 #include "../math.cuh"
 #include "../ffn/forward.cuh"
+#include <cuComplex.h>
 
 template<typename T>
-__device__ __forceinline__ void dev_conv_read_to_shared_memory(
+__device__ __forceinline__ T dev_conv_apply_padding(
+    T* in_ptr, uint32_t pad_mode, uint32_t iw, uint32_t ih, int32_t gw, int32_t gh
+) {
+    if (pad_mode == 1) {
+        // Reflective
+        gh = gh < 0
+                 ? -gh
+                 : gh >= static_cast<int32_t>(ih)
+                       ? 2 * (static_cast<int32_t>(ih) - 1) - gh
+                       : gh;
+        gw = gw < 0
+                 ? -gw
+                 : gw >= static_cast<int32_t>(iw)
+                       ? 2 * (static_cast<int32_t>(iw) - 1) - gw
+                       : gw;
+        return in_ptr[static_cast<uint32_t>(gh) * iw + static_cast<uint32_t>(gw)];
+    }
+
+    if (pad_mode == 2) {
+        // Replicate
+        gh = gh < 0 ? 0 : gh >= static_cast<int32_t>(ih) ? static_cast<int32_t>(ih) - 1 : gh;
+        gw = gw < 0 ? 0 : gw >= static_cast<int32_t>(iw) ? static_cast<int32_t>(iw) - 1 : gw;
+        return in_ptr[static_cast<uint32_t>(gh) * iw + static_cast<uint32_t>(gw)];
+    }
+
+    return static_cast<T>(0.0f);
+}
+
+template<typename T>
+__device__ void dev_conv_read_to_shared_memory(
     T* __restrict__ shared_input_tile, const T* __restrict__ in_ptr,
     uint32_t tid, uint32_t total_tile_elems, uint32_t threads_per_block,
     uint32_t tile_stride, uint32_t tile_w, uint32_t in_h_start, uint32_t in_w_start,
     uint32_t ih, uint32_t iw, uint32_t pad, uint32_t pad_mode,
-    uint32_t act = 0, f32_t leaky_relu_coeff = 0.0f, T* __restrict__ postact_features = nullptr
+    uint32_t act = 0, const f32_t leaky_relu_coeff = 0.0f, T* __restrict__ postact_features = nullptr
 ) {
     for (uint32_t tile_idx = tid; tile_idx < total_tile_elems; tile_idx += threads_per_block) {
         uint32_t local_h = tile_idx / tile_stride;
@@ -35,25 +65,7 @@ __device__ __forceinline__ void dev_conv_read_to_shared_memory(
 
             if (gh >= -static_cast<int32_t>(pad) && gh < max_h_pad &&
                 gw >= -static_cast<int32_t>(pad) && gw < max_w_pad) {
-                if (pad_mode == 1) {
-                    // Reflective
-                    gh = gh < 0
-                             ? -gh
-                             : gh >= static_cast<int32_t>(ih)
-                                   ? 2 * (static_cast<int32_t>(ih) - 1) - gh
-                                   : gh;
-                    gw = gw < 0
-                             ? -gw
-                             : gw >= static_cast<int32_t>(iw)
-                                   ? 2 * (static_cast<int32_t>(iw) - 1) - gw
-                                   : gw;
-                    fill_value = in_ptr[static_cast<uint32_t>(gh) * iw + static_cast<uint32_t>(gw)];
-                } else if (pad_mode == 2) {
-                    // Replicate
-                    gh = gh < 0 ? 0 : gh >= static_cast<int32_t>(ih) ? static_cast<int32_t>(ih) - 1 : gh;
-                    gw = gw < 0 ? 0 : gw >= static_cast<int32_t>(iw) ? static_cast<int32_t>(iw) - 1 : gw;
-                    fill_value = in_ptr[static_cast<uint32_t>(gh) * iw + static_cast<uint32_t>(gw)];
-                }
+                fill_value = dev_conv_apply_padding(in_ptr, pad_mode, iw, ih, gw, gh);
             }
 
             read_val = fill_value;
@@ -104,6 +116,91 @@ template<typename T>
 __device__ void conv_forward_pass_0_kernel(
     T * __restrict__ prenorm_features, const T * __restrict__ in, const T * __restrict__ w, const T * __restrict__ b,
     uint32_t use_bias, uint32_t ic, uint32_t oc,
+    uint32_t iw, uint32_t ih, uint32_t ow, uint32_t oh, uint32_t fw, uint32_t fh,
+    uint32_t pad, uint32_t pad_mode,
+    uint32_t stride_x, uint32_t stride_y, uint32_t dil_x, uint32_t dil_y
+);
+
+/**
+ * Performs row FFT, where each row is isolated as a single 1D sample array and passed into the FFT.
+ *
+ * @tparam T Either f32_t or f16_t.
+ * @param fft_in The fourier transform for input.
+ * @param fft_w The fourier transform for filter weights.
+ * @param twiddle_lut The lookup table for the twiddle factors
+ * @param in The input tensor.
+ * @param w The filter weight tensor.
+ * @param pad_mode The mode of padding used.
+ * @param batches number of batches
+ * @param ic The number of input channels (channels of the incoming tensor).
+ * @param iw The width of the input tensor.
+ * @param ih The height of the input tensor.
+ * @param ow The width of the fourier transform.
+ * @param oh The height of the fourier transform.
+ * @param fw The width of the filter kernel.
+ * @param fh The height of the filter kernel.
+ * @param pad The padding size.
+ * @param dil_x The dilation in the horizontal axis.
+ * @param dil_y The dilation in the vertical axis.
+ */
+template<typename T>
+__device__ void conv_fft_row_transform_kernel(
+    cuFloatComplex* __restrict__ fft_in, cuFloatComplex* __restrict__ fft_w,
+    const cuFloatComplex* __restrict__ twiddle_lut, const T* __restrict__ in, const T* __restrict__ w,
+    uint32_t batches, uint32_t ic,
+    uint32_t iw, uint32_t ih, uint32_t ow, uint32_t oh, uint32_t fw, uint32_t fh,
+    uint32_t pad, uint32_t pad_mode, uint32_t dil_x, uint32_t dil_y
+);
+
+/**
+ * Performs column FFT, where each column is isolated as a single 1D sample array and passed into the FFT.
+ * This function is called after the row FFT, and processes fft_in and fft_w into complete fourier transforms.
+ *
+ * @param fft_in The fourier transform for input.
+ * @param fft_w The fourier transform for filter weights.
+ * @param twiddle_lut The lookup table for the twiddle factors
+ * @param batches number of batches
+ * @param ic The number of input channels (channels of the incoming tensor).
+ * @param ow The width of the fourier transform.
+ * @param oh The height of the fourier transform.
+ * @param fw The width of the filter kernel.
+ * @param fh The height of the filter kernel.
+ */
+extern "C" __global__ void conv_fft_col_transform_kernel(
+    cuFloatComplex* __restrict__ fft_in, cuFloatComplex* __restrict__ fft_w,
+    const cuFloatComplex* __restrict__ twiddle_lut,
+    uint32_t batches, uint32_t ic, uint32_t ow, uint32_t oh
+);
+
+/**
+ *
+ * @tparam T  * @tparam T Either f32_t or f16_t.
+ * @param prenorm_features The tensor representing the features before normalisation (after linear).
+ * @param fft_in The fourier transform for input.
+ * @param fft_w The fourier transform for filter weights.
+ * @param b The filter bias tensor.
+ * @param twiddle_lut The lookup table for the twiddle factors
+ * @param use_bias If true, bias is added. Otherwise, bias is not added.
+ * @param pad_mode The mode of padding used.
+ * @param batches number of batches
+ * @param ic The number of input channels (channels of the incoming tensor).
+ * @param iw The width of the input tensor.
+ * @param ih The height of the input tensor.
+ * @param ow The width of the fourier transform.
+ * @param oh The height of the fourier transform.
+ * @param fw The width of the filter kernel.
+ * @param fh The height of the filter kernel.
+ * @param pad The padding size.
+ * @param stride_x The stride step size along the width (horizontal axis).
+ * @param stride_y The stride step size along the height (vertical axis).
+ * @param dil_x The dilation in the horizontal axis.
+ * @param dil_y The dilation in the vertical axis.
+ */
+template<typename T>
+__device__ void conv_ifft_out_transform_kernel(
+    T * __restrict__ prenorm_features, cuFloatComplex* __restrict__ fft_in, cuFloatComplex* __restrict__ fft_w,
+    const cuFloatComplex* __restrict__ twiddle_lut, const T * __restrict__ b,
+    uint32_t use_bias, uint32_t batches, uint32_t ic, uint32_t oc,
     uint32_t iw, uint32_t ih, uint32_t ow, uint32_t oh, uint32_t fw, uint32_t fh,
     uint32_t pad, uint32_t pad_mode,
     uint32_t stride_x, uint32_t stride_y, uint32_t dil_x, uint32_t dil_y

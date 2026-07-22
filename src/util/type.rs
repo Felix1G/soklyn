@@ -1,3 +1,4 @@
+use std::f32::consts::PI;
 use crate::core::{ImageBatch, Matrix, Tensor};
 use crate::io::device::GpuContext;
 use crate::util::log::Error;
@@ -139,3 +140,34 @@ where
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Complex32 {
+    pub re: f32,
+    pub im: f32,
+}
+
+unsafe impl DeviceRepr for Complex32 {}
+unsafe impl ValidAsZeroBits for Complex32 {}
+
+pub trait ComplexType {}
+impl ComplexType for Complex32 {}
+
+// guarantees layout is exactly matches cuFloatComplex
+const _: () = assert!(size_of::<Complex32>() == 8);
+const _: () = assert!(align_of::<Complex32>() == 4);
+
+pub(crate) fn generate_twiddle_lut(n: usize) -> Vec<Complex32> {
+    let half_n = n / 2;
+    let mut lut = Vec::with_capacity(half_n);
+
+    for k in 0..half_n {
+        let angle = -2.0 * PI * (k as f32) / (n as f32);
+        lut.push(Complex32 {
+            re: angle.cos(),
+            im: angle.sin(),
+        });
+    }
+
+    lut
+}

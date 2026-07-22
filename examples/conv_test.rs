@@ -1,11 +1,10 @@
-use std::process::exit;
-use std::time::SystemTime;
-use soklyn::{ConvBlock, KernelConfig, InitFunc, InitHeUniformFunc, PaddingType, Normalisation, PoolingType, Activation, Regularisation, LossFunc};
-use soklyn::Activation::{Mish, ReLU, Softmax};
 use soklyn::core::Tensor4D;
 use soklyn::io::device::GpuContext;
-use soklyn::log::Error;
-use soklyn::LossFunc::CrossEntropyLoss;
+use soklyn::log::{init_log, Error};
+use soklyn::Activation::Mish;
+use soklyn::{ConvAlgorithm, ConvBlock, InitFunc, InitHeUniformFunc, KernelConfig, Normalisation, PaddingType, PoolingType, Regularisation};
+use std::process::exit;
+use std::time::SystemTime;
 
 fn main() {
     if let Err(err) = run_pipeline() {
@@ -17,8 +16,8 @@ fn main() {
 type Precision = f32;
 
 fn stress_test_forward(context: &GpuContext, init: &mut InitHeUniformFunc) -> Result<(), Error> {
-    let layer = ConvBlock::<Precision>::new(
-        &context, true, 64, &(500, 500), init,
+    let mut layer = ConvBlock::<Precision>::new(
+        &context, ConvAlgorithm::Spatial, true, 64, &(500, 500), init,
         KernelConfig::new((80, 80), 1, PaddingType::ZeroPadding, (1, 1), (1, 1))?,
         KernelConfig::disable(), PoolingType::NoPooling,
         5, 40, Mish, Normalisation::Disabled,
@@ -35,6 +34,8 @@ fn stress_test_forward(context: &GpuContext, init: &mut InitHeUniformFunc) -> Re
 }
 
 fn run_pipeline() -> Result<(), Error> {
+    init_log();
+
     let context = GpuContext::new(16);
     let mut init = InitHeUniformFunc::new::<Precision>(10, 0.1);
 
@@ -42,16 +43,13 @@ fn run_pipeline() -> Result<(), Error> {
     //return Ok(());
 
     let mut layers = vec![
-        ConvBlock::<Precision>::default(
-            &context, true, 2, &(4, 3), &mut init,
+        ConvBlock::<Precision>::new(
+            &context, ConvAlgorithm::FrequencyFFT, true, 2, &(4, 3), &mut init,
             KernelConfig::new((2, 3), 2, PaddingType::ReflectivePadding, (1, 2), (2, 1))?,
-            KernelConfig::new((2, 2), 2, PaddingType::ZeroPadding, (2, 1), (1, 2))?,
-            2, 3, Normalisation::BatchNorm,
+            KernelConfig::disable(),//KernelConfig::new((2, 2), 2, PaddingType::ZeroPadding, (2, 1), (1, 2))?,
+            PoolingType::MaxPooling, 2, 3, Mish, Normalisation::BatchNorm, Regularisation::None, 0.0
         )?
     ];
-    layers[0].set_pooling_type(PoolingType::MaxPooling);
-    layers[0].set_activation(Mish);
-    //layers[0].set_mask_coeff(0.8);
 
     let input = Tensor4D::<Precision>::from_cpu_vector(
         &context,
@@ -81,6 +79,7 @@ fn run_pipeline() -> Result<(), Error> {
 
     let out_img = layers[0].get_features().download(&context)?;
     let filter_img = layers[0].get_filter_weights().download(&context)?;
+    let fft_in = context.download(&layers[0].get_fft_weights().unwrap())?;
 
     println!("\n\nFILTERS:");
 
@@ -102,9 +101,26 @@ fn run_pipeline() -> Result<(), Error> {
 
     for n in 0..out_img.get_n() {
         for c in 0..out_img.get_c() {
-            for y in 0..out_img.get_h() {
-                for x in 0..out_img.get_w() {
-                    print!("{},", out_img.get(n, c, y, x).unwrap());
+            for y in 0..3 {
+                for x in 0..6 {
+                    print!("{},", out_img.get_v((n * out_img.get_c() + c) * 18 + y * 6 + x).unwrap());
+                }
+                println!();
+            }
+            println!();
+        }
+        println!("----------------------------------------");
+        println!();
+    }
+
+    println!("\n\nFFT INPUT:  LENGTH:{}", fft_in.len());
+
+    for n in 0..3 {
+        for c in 0..2 {
+            for y in 0..8 {
+                for x in 0..8 {
+                    let idx = n * 2 * 8 * 8 + c * 8 * 8 + y * 8 + x;
+                    print!("{}+{}i,", fft_in[idx].re, fft_in[idx].im);
                 }
                 println!();
             }

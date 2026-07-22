@@ -288,7 +288,8 @@ impl InitFunc for InitZeroFunc {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+/// Type of padding used for the Convolutional Neural Network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaddingType {
     /// Padding is filled with `0`s.
     ///
@@ -446,6 +447,12 @@ impl KernelConfig {
         (self.dimension.1 - 1) * self.dilation.1 + 1
     }
 
+    pub(crate) fn padded_length(&self, len: &(usize, usize)) -> (usize, usize) {
+        (len.0 + 2 * self.pad, len.1 + 2 * self.pad)
+    }
+
+    /// The dimension of the output from the given input when passed through this kernel.
+    ///
     /// # Arguments
     /// * `len` - The dimension of the input (spatial width, spatial height).
     pub(crate) fn elements_from_length(&self, len: &(usize, usize)) -> (usize, usize) {
@@ -455,22 +462,21 @@ impl KernelConfig {
                 (len.1 + self.stride.1 - 1) / self.stride.1
             )
         } else {
-            let padded_len_x = len.0 + 2 * self.pad;
-            let padded_len_y = len.1 + 2 * self.pad;
+            let padded_len = self.padded_length(&len);
 
             let size_x = self.actual_width();
             let size_y = self.actual_height();
 
-            let elems_x = if padded_len_x < size_x {
+            let elems_x = if padded_len.0 < size_x {
                 0
             } else {
-                ((padded_len_x - size_x) / self.stride.0) + 1
+                ((padded_len.0 - size_x) / self.stride.0) + 1
             };
 
-            let elems_y = if padded_len_y < size_y {
+            let elems_y = if padded_len.1 < size_y {
                 0
             } else {
-                ((padded_len_y - size_y) / self.stride.1) + 1
+                ((padded_len.1 - size_y) / self.stride.1) + 1
             };
 
             (elems_x, elems_y)
@@ -479,7 +485,7 @@ impl KernelConfig {
 }
 
 /// The type of pooling supported for the Convolutional Neural Network.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolingType {
     /// No pooling will be done.
     NoPooling,
@@ -503,4 +509,22 @@ impl PoolingType {
             PoolingType::AveragePooling => 3
         }
     }
+}
+
+/// Defines the mathematical strategy used to compute both the forward activation
+/// passes and backward gradient updates within the convolutional layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConvAlgorithm {
+    /// The standard spatial-domain sliding window convolution.
+    ///
+    /// Best for small kernel sizes (e.g., 3x3 or 5x5) which can utilise highly-optimised
+    /// direct matrix multiplication or implicit GEMM.
+    Spatial,
+
+    /// Accelerates convolutions by mapping inputs and weights into the frequency
+    /// domain via the Fast Fourier Transform (FFT), which converts into
+    /// O(N² log N) element-wise multiplications.
+    ///
+    /// Ideal for very large, dense kernel sizes.
+    FrequencyFFT
 }

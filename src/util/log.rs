@@ -25,7 +25,7 @@ pub enum Error {
     #[error("Temp file writing error: {0}")]
     PersistError(#[from] PersistError),
 
-    #[error("Index out of bounds for {reason}: {idx} for length {max_idx}.")]
+    #[error("Index out of bounds: {reason}: {idx} for length {max_idx}.")]
     IndexOutOfBounds {
         idx: usize,
         max_idx: usize,
@@ -81,13 +81,13 @@ pub enum Error {
     #[error("Invalid network configuration: {reason}")]
     InvalidConfiguration { reason: String },
 
-    #[error("Invalid operation for {0}: Action requires the network to be in training mode.")]
-    TrainingModeRequired(&'static str),
+    #[error("Invalid operation: {reason}: Action requires the network to be in training mode.")]
+    TrainingModeRequired { reason: &'static str },
 
-    #[error("Allocation limit exceeded for {reason}: items received ({received}) exceeds maximum allowed allocation ({max}).")]
+    #[error("Allocation limit exceeded: {reason}: items received ({received}) exceeds maximum allowed allocation ({max}).")]
     AllocationLimitExceeded { received: usize, max: usize, reason: &'static str },
 
-    #[error("Dimension mismatch for {reason}: expected {expected}, found {found}.")]
+    #[error("Dimension mismatch: {reason}: expected {expected}, found {found}.")]
     MismatchedDimensions {
         reason: &'static str,
         expected: usize,

@@ -1,7 +1,7 @@
 use crate::io::device::GpuContext;
 use crate::util::log::Error;
 use crate::util::r#type::PrecisionType;
-use crate::TensorContainerType;
+use crate::{ComplexType, TensorContainerType};
 use cudarc::driver::CudaSlice;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -287,6 +287,17 @@ impl<T: PrecisionType> ImageBatch<T> {
         n * (self.c * self.h * self.w) + c * (self.h * self.w) + h * self.w + w
     }
 
+    /// Safely fetches an immutable reference to the element at index `idx`.
+    ///
+    /// Returns `None` if any coordinates are out of bounds.
+    pub fn get_v(&self, idx: usize) -> Option<&T> {
+        if idx <= self.v.len() {
+            self.v.get(idx)
+        } else {
+            None
+        }
+    }
+
     /// Safely fetches an immutable reference to the element at `(n, c, h, w)`.
     ///
     /// Returns `None` if any coordinates are out of bounds.
@@ -356,7 +367,7 @@ impl<T: PrecisionType> ImageBatch<T> {
     getter_copy!(pub get_c, c, usize);
     getter_copy!(pub get_h, h, usize);
     getter_copy!(pub get_w, w, usize);
-    getter!(pub get_v, v, Vec<T>);
+    getter!(pub get_data, v, Vec<T>);
 
     /// Returns `true` if the container holds zero elements.
     pub fn is_empty(&self) -> bool { self.v.len() == 0 }

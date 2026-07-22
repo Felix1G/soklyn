@@ -7,9 +7,7 @@ use crate::util::core::Tensor2D;
 use crate::util::log::Error;
 use crate::util::r#type::{Precision, PrecisionType};
 use cudarc::driver::sys::CUctx_flags;
-use cudarc::driver::{
-    CudaContext, CudaFunction, CudaStream, LaunchArgs, LaunchConfig, PushKernelArg,
-};
+use cudarc::driver::{CudaContext, CudaFunction, CudaSlice, CudaStream, DeviceRepr, LaunchArgs, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use std::sync::Arc;
 
@@ -33,6 +31,8 @@ pub struct GpuContext {
     conv_forward_pass_func0: (CudaFunction, CudaFunction), // CONV Z = WX + B
     conv_forward_pass_func1: (CudaFunction, CudaFunction), // Normalisation
     conv_forward_pass_func2: (CudaFunction, CudaFunction), // Activation, Pooling, Dropout
+    conv_fft_row_transform_func: (CudaFunction, CudaFunction),
+    conv_fft_col_transform_func: CudaFunction,
     tile_dim: u32,
     tile_dim_minus_1: u32,
     tile_dim_2: u32,
@@ -82,6 +82,9 @@ impl GpuContext {
         let conv_forward_pass_1_f16 = load_kernel("conv_forward_pass_1_kernel_f16");
         let conv_forward_pass_2_f32 = load_kernel("conv_forward_pass_2_kernel_f32");
         let conv_forward_pass_2_f16 = load_kernel("conv_forward_pass_2_kernel_f16");
+        let conv_fft_row_transform_f32 = load_kernel("conv_fft_row_transform_kernel_f32");
+        let conv_fft_row_transform_f16 = load_kernel("conv_fft_row_transform_kernel_f16");
+        let conv_fft_col_transform_func = load_kernel("conv_fft_col_transform_kernel");
 
         let stream = CudaContext::new_stream(&context).expect("Failed to create stream");
         context
@@ -114,6 +117,8 @@ impl GpuContext {
             conv_forward_pass_func0: (conv_forward_pass_0_f32, conv_forward_pass_0_f16),
             conv_forward_pass_func1: (conv_forward_pass_1_f32, conv_forward_pass_1_f16),
             conv_forward_pass_func2: (conv_forward_pass_2_f32, conv_forward_pass_2_f16),
+            conv_fft_row_transform_func: (conv_fft_row_transform_f32, conv_fft_row_transform_f16),
+            conv_fft_col_transform_func,
             tile_dim,
             tile_dim_minus_1: tile_dim - 1,
             tile_dim_2,
@@ -158,6 +163,18 @@ impl GpuContext {
 
     pub(crate) fn get_stream(&self) -> &Arc<CudaStream> {
         &self.stream
+    }
+
+    pub(crate) fn get_tile_dim(&self) -> u32 {
+        self.tile_dim
+    }
+
+    pub(crate) fn get_tile_dim_2(&self) -> u32 {
+        self.tile_dim_2
+    }
+
+    pub fn download<K: DeviceRepr>(&self, cuda_slice: &CudaSlice<K>) -> Result<Vec<K>, Error> {
+        Ok(self.stream.clone_dtoh(cuda_slice)?)
     }
 
     fn calculate_cfg2d(&self, x: usize, y: usize, mem: u32) -> LaunchConfig {

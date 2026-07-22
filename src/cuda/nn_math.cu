@@ -11,6 +11,7 @@
 #include "kernel/ffn/forward.cu"
 #include "kernel/ffn/forward_wmma.cu"
 #include "kernel/conv/forward.cu"
+#include "kernel/conv/forward_fft.cu"
 
 extern "C" {
 
@@ -293,4 +294,27 @@ __global__ void conv_forward_pass_2_kernel_f16(
     );
 }
 
+__global__ void conv_fft_row_transform_kernel_f32(
+    cuFloatComplex* __restrict__ fft_in, cuFloatComplex* __restrict__ fft_w,
+    const cuFloatComplex* __restrict__ twiddle_lut, const f32_t* __restrict__ in, const f32_t* __restrict__ w,
+    const uint32_t batches, const uint32_t ic,
+    const uint32_t iw, const uint32_t ih, const uint32_t ow, const uint32_t oh, const uint32_t fw, const uint32_t fh,
+    const uint32_t pad, const uint32_t pad_mode, const uint32_t dil_x, const uint32_t dil_y
+) {
+    conv_fft_row_transform_kernel(
+        fft_in, fft_w, twiddle_lut, in, w, batches, ic, iw, ih, ow, oh, fw, fh, pad, pad_mode, dil_x, dil_y
+    );
+}
+
+__global__ void conv_fft_row_transform_kernel_f16(
+    cuFloatComplex* __restrict__ fft_in, cuFloatComplex* __restrict__ fft_w,
+    const cuFloatComplex* __restrict__ twiddle_lut, const f16_t* __restrict__ in, const f16_t* __restrict__ w,
+    const uint32_t batches, const uint32_t ic,
+    const uint32_t iw, const uint32_t ih, const uint32_t ow, const uint32_t oh, const uint32_t fw, const uint32_t fh,
+    const uint32_t pad, const uint32_t pad_mode, const uint32_t dil_x, const uint32_t dil_y
+) {
+    conv_fft_row_transform_kernel(
+        fft_in, fft_w, twiddle_lut, in, w, batches, ic, iw, ih, ow, oh, fw, fh, pad, pad_mode, dil_x, dil_y
+    );
+}
 }
