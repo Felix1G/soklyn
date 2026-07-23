@@ -1,4 +1,3 @@
-use cudarc::driver::CudaSlice;
 use crate::core::{Tensor1D, Tensor2D, Tensor4D};
 use crate::io::device::GpuContext;
 use crate::log::Error;
@@ -7,7 +6,11 @@ use crate::Activation::Identity;
 use crate::ConvAlgorithm::FrequencyFFT;
 use crate::Normalisation::Disabled;
 use crate::PoolingType::{MaxPooling, NoPooling};
-use crate::{getter, getter_copy, getter_option, setter, Activation, Complex32, ConvAlgorithm, InitFunc, KernelConfig, LossFunc, Normalisation, PoolingType, PrecisionType, Regularisation};
+use crate::{
+    getter, getter_copy, getter_option, setter, Activation, Complex32, ConvAlgorithm,
+    InitFunc, KernelConfig, LossFunc, Normalisation, PoolingType, PrecisionType, Regularisation,
+};
+use cudarc::driver::CudaSlice;
 use half::f16;
 use ConvAlgorithm::Spatial;
 
@@ -15,19 +18,27 @@ pub(crate) struct ConvForwardCache<T: PrecisionType> {
     features: Tensor4D<T>,
     predrop_features: Tensor4D<T>,
     prepooling_features: Tensor4D<T>,
-    preact_features: Tensor4D<T>
+    preact_features: Tensor4D<T>,
 }
 
 impl<T: PrecisionType> ConvForwardCache<T> {
-    pub fn new(context: &GpuContext, pre_pooling_shape: &[usize; 4], aft_pooling_shape: &[usize; 4], enable_pooling: bool) -> Result<Self, Error> {
+    pub fn new(
+        context: &GpuContext,
+        pre_pooling_shape: &[usize; 4],
+        aft_pooling_shape: &[usize; 4],
+        enable_pooling: bool,
+    ) -> Result<Self, Error> {
         Ok(Self {
             features: Tensor4D::zeros(context, aft_pooling_shape)?,
             predrop_features: Tensor4D::zeros(context, aft_pooling_shape)?,
-            prepooling_features: Tensor4D::zeros(context, if enable_pooling {
-                                                    pre_pooling_shape
-                                                } else {
-                                                    &[0, 0, 0, 0]
-                                                })?,
+            prepooling_features: Tensor4D::zeros(
+                context,
+                if enable_pooling {
+                    pre_pooling_shape
+                } else {
+                    &[0, 0, 0, 0]
+                },
+            )?,
             preact_features: Tensor4D::zeros(context, pre_pooling_shape)?,
         })
     }
@@ -51,10 +62,17 @@ pub(crate) struct ConvNormCache<T: PrecisionType> {
 }
 
 impl<T: PrecisionType> ConvNormCache<T> {
-    pub fn new(context: &GpuContext, norm: Normalisation, feature_shape: &[usize; 4]) -> Result<Self, Error> {
+    pub fn new(
+        context: &GpuContext,
+        norm: Normalisation,
+        feature_shape: &[usize; 4],
+    ) -> Result<Self, Error> {
         let (norm_shape, rstd_shape) =
             if norm == Normalisation::LayerNorm || norm == Normalisation::RMSNorm {
-                ([1, feature_shape[1], feature_shape[2], feature_shape[3]], [feature_shape[0]])
+                (
+                    [1, feature_shape[1], feature_shape[2], feature_shape[3]],
+                    [feature_shape[0]],
+                )
             } else if norm == Normalisation::BatchNorm {
                 ([1, feature_shape[1], 1, 1], [feature_shape[1]])
             } else {
@@ -120,10 +138,11 @@ pub struct ConvBlock<T: PrecisionType> {
 
     fft_input: Option<CudaSlice<Complex32>>,
     fft_weights: Option<CudaSlice<Complex32>>,
+    fft_output: Option<CudaSlice<Complex32>>,
 
     twiddle_lut_w: Option<CudaSlice<Complex32>>,
     twiddle_lut_h: Option<CudaSlice<Complex32>>,
-    twiddle_last_size: (usize, usize) // used to detect change in input size, which causes a regeneration of the twiddle look up table
+    twiddle_last_size: (usize, usize), // used to detect change in input size, which causes a regeneration of the twiddle look up table
 }
 
 impl<T: PrecisionType> ConvBlock<T> {
@@ -152,7 +171,7 @@ impl<T: PrecisionType> ConvBlock<T> {
         pooling_cfg: KernelConfig,
         in_channels: usize,
         out_channels: usize,
-        normalisation: Normalisation
+        normalisation: Normalisation,
     ) -> Result<Self, Error> {
         Self::new(
             context,
@@ -237,7 +256,9 @@ impl<T: PrecisionType> ConvBlock<T> {
         let filter_out_dim = filter_cfg.elements_from_length(&max_input_dim);
         if filter_out_dim.0 == 0 || filter_out_dim.1 == 0 {
             return Err(Error::InvalidConfiguration {
-                reason: String::from("The filter size is too large. The output tensor cannot be created."),
+                reason: String::from(
+                    "The filter size is too large. The output tensor cannot be created.",
+                ),
             });
         }
 
@@ -246,7 +267,9 @@ impl<T: PrecisionType> ConvBlock<T> {
             pooling_out_dim = pooling_cfg.elements_from_length(&filter_out_dim);
             if pooling_out_dim.0 == 0 || pooling_out_dim.1 == 0 {
                 return Err(Error::InvalidConfiguration {
-                    reason: String::from("The pooling size is too large. The output tensor cannot be created."),
+                    reason: String::from(
+                        "The pooling size is too large. The output tensor cannot be created.",
+                    ),
                 });
             }
         } else {
@@ -261,21 +284,26 @@ impl<T: PrecisionType> ConvBlock<T> {
         ];
 
         let full_input_size = filter_cfg.padded_length(&max_input_dim);
-        let fft_output_size = (full_input_size.0.next_power_of_two(), full_input_size.1.next_power_of_two());
-        let fft_total_elems_chw = in_channels * fft_output_size.0 * fft_output_size.1;
+        let fft_output_size = (
+            full_input_size.0.next_power_of_two(),
+            full_input_size.1.next_power_of_two(),
+        );
+        let fft_output_spatial_size = fft_output_size.0 * fft_output_size.1;
 
         if algorithm == FrequencyFFT {
             if !full_input_size.0.is_power_of_two() {
                 log::warn!(
                     "Algorithm is set to FFT, but full maximum input width ({}) is not a power of 2. Internal math will pad the width to {}.",
-                    full_input_size.0, fft_output_size.0
+                    full_input_size.0,
+                    fft_output_size.0
                 );
             }
 
             if !full_input_size.1.is_power_of_two() {
                 log::warn!(
                     "Algorithm is set to FFT, but full maximum input height ({}) is not a power of 2. Internal math will pad the height to {}.",
-                    full_input_size.1, fft_output_size.1
+                    full_input_size.1,
+                    fft_output_size.1
                 );
             }
         }
@@ -292,7 +320,7 @@ impl<T: PrecisionType> ConvBlock<T> {
                     pooling_out_dim.1,
                     pooling_out_dim.0,
                 ],
-                pooling_cfg.is_enabled()
+                pooling_cfg.is_enabled(),
             )?,
             Tensor4D::from_cpu_vector(
                 context,
@@ -307,7 +335,11 @@ impl<T: PrecisionType> ConvBlock<T> {
             if normalisation == Disabled {
                 None
             } else {
-                Some(ConvNormCache::new(context, normalisation, &filter_out_shape)?)
+                Some(ConvNormCache::new(
+                    context,
+                    normalisation,
+                    &filter_out_shape,
+                )?)
             },
             max_batch_size,
             max_input_dim.clone(),
@@ -316,15 +348,26 @@ impl<T: PrecisionType> ConvBlock<T> {
             regularisation,
             mask_coeff,
             if algorithm == FrequencyFFT {
-                Some(context.get_stream().alloc_zeros::<Complex32>(max_batch_size * fft_total_elems_chw)?)
+                Some(context.get_stream().alloc_zeros::<Complex32>(
+                    max_batch_size * in_channels * fft_output_spatial_size,
+                )?)
             } else {
                 None
             },
             if algorithm == FrequencyFFT {
-                Some(context.get_stream().alloc_zeros::<Complex32>(out_channels * fft_total_elems_chw)?)
+                Some(context.get_stream().alloc_zeros::<Complex32>(
+                    out_channels * in_channels * fft_output_spatial_size,
+                )?)
             } else {
                 None
-            }
+            },
+            if algorithm == FrequencyFFT {
+                Some(context.get_stream().alloc_zeros::<Complex32>(
+                    max_batch_size * out_channels * fft_output_spatial_size,
+                )?)
+            } else {
+                None
+            },
         )
     }
 
@@ -347,6 +390,7 @@ impl<T: PrecisionType> ConvBlock<T> {
         mask_coeff: f32,
         fft_input: Option<CudaSlice<Complex32>>,
         fft_weights: Option<CudaSlice<Complex32>>,
+        fft_output: Option<CudaSlice<Complex32>>,
     ) -> Result<Self, Error> {
         Ok(Self {
             algorithm,
@@ -367,9 +411,10 @@ impl<T: PrecisionType> ConvBlock<T> {
             mask_coeff,
             fft_input,
             fft_weights,
+            fft_output,
             twiddle_lut_w: None,
             twiddle_lut_h: None,
-            twiddle_last_size: (0, 0)
+            twiddle_last_size: (0, 0),
         })
     }
 
@@ -382,6 +427,9 @@ impl<T: PrecisionType> ConvBlock<T> {
     getter!(pub get_features, forward_cache.features, Tensor4D<T>);
     getter_option!(pub(crate) get_norm_cache, norm_cache, Option<ConvNormCache<T>>);
     getter!(pub get_mask, mask, Tensor4D<T>);
+    pub fn get_prenorm_features(&self) -> &Tensor4D<T> {
+        &self.norm_cache.as_ref().unwrap().prenorm_features
+    }
 
     // Getting configurations
     getter!(pub get_algorithm, algorithm, ConvAlgorithm);
@@ -400,6 +448,7 @@ impl<T: PrecisionType> ConvBlock<T> {
     // FFT cache
     getter_option!(pub get_fft_input, fft_input, Option<CudaSlice<Complex32>>);
     getter_option!(pub get_fft_weights, fft_weights, Option<CudaSlice<Complex32>>);
+    getter_option!(pub get_fft_output, fft_output, Option<CudaSlice<Complex32>>);
     getter_option!(pub get_twiddle_lut_width, twiddle_lut_w, Option<CudaSlice<Complex32>>);
     getter_option!(pub get_twiddle_lut_height, twiddle_lut_h, Option<CudaSlice<Complex32>>);
 
@@ -430,7 +479,7 @@ impl<T: PrecisionType> ConvBlock<T> {
             return Err(Error::AllocationLimitExceeded {
                 received: input.batches(),
                 max: self.max_batch_size,
-                reason: "input batches"
+                reason: "input batches",
             });
         }
 
@@ -443,7 +492,9 @@ impl<T: PrecisionType> ConvBlock<T> {
             });
         }
 
-        let output_size = self.filter_cfg.elements_from_length(&(input.width(), input.height()));
+        let output_size = self
+            .filter_cfg
+            .elements_from_length(&(input.width(), input.height()));
 
         if input.width() == 0 || output_size.0 == 0 {
             return Err(Error::MismatchedDimensions {
@@ -537,21 +588,28 @@ impl<T: PrecisionType> ConvBlock<T> {
     ) -> Result<&Tensor4D<T>, Error> {
         self.check_input_dimension(input, batch_size)?;
 
-        let full_input_size = self.filter_cfg.padded_length(&(input.width(), input.height()));
-        let fft_output_size = (full_input_size.0.next_power_of_two(), full_input_size.1.next_power_of_two());
+        let full_input_size = self
+            .filter_cfg
+            .padded_length(&(input.width(), input.height()));
+        let fft_output_size = (
+            full_input_size.0.next_power_of_two(),
+            full_input_size.1.next_power_of_two(),
+        );
 
         if self.algorithm == FrequencyFFT {
             if !full_input_size.0.is_power_of_two() {
                 log::warn!(
                     "Algorithm is set to FFT, but full input width ({}) is not a power of 2. Internal math will pad the width to {}.",
-                    full_input_size.0, fft_output_size.0
+                    full_input_size.0,
+                    fft_output_size.0
                 );
             }
 
             if !full_input_size.1.is_power_of_two() {
                 log::warn!(
                     "Algorithm is set to FFT, but full input height ({}) is not a power of 2. Internal math will pad the height to {}.",
-                    full_input_size.1, fft_output_size.1
+                    full_input_size.1,
+                    fft_output_size.1
                 );
             }
 
@@ -559,13 +617,12 @@ impl<T: PrecisionType> ConvBlock<T> {
             // This error is raised as in the cooley-tukey function, a register array is set with static size of MAX_ITEMS.
             // Hence, only that many elements can fit both arrays, which is determined also from tile dimensions in gpu context.
             let max_freq_map_size = 16 * context.get_tile_dim_2() as usize;
-            if fft_output_size.0 > max_freq_map_size ||
-                fft_output_size.1 > max_freq_map_size {
+            if fft_output_size.0 > max_freq_map_size || fft_output_size.1 > max_freq_map_size {
                 return Err(Error::AllocationLimitExceeded {
                     reason: "frequency map exceeds size limit",
                     max: max_freq_map_size,
                     received: fft_output_size.0.max(fft_output_size.1),
-                })
+                });
             }
         }
 
@@ -607,7 +664,7 @@ impl<T: PrecisionType> ConvBlock<T> {
             &fft_output_size,
             batch_size,
             use_dropout,
-            step
+            step,
         )?;
 
         Ok(&self.forward_cache.features)
@@ -640,7 +697,9 @@ impl<T: PrecisionType> ConvBlock<T> {
         act_mode: Activation,
     ) -> Result<(), Error> {
         if !self.is_training {
-            return Err(Error::TrainingModeRequired { reason: "compute loss" });
+            return Err(Error::TrainingModeRequired {
+                reason: "compute loss",
+            });
         }
 
         if target.height() != self.forward_cache.features.height() {
@@ -671,7 +730,7 @@ impl<T: PrecisionType> ConvBlock<T> {
             return Err(Error::AllocationLimitExceeded {
                 received: target.batches(),
                 max: self.max_batch_size,
-                reason: "target batches"
+                reason: "target batches",
             });
         }
 
@@ -679,21 +738,26 @@ impl<T: PrecisionType> ConvBlock<T> {
             LossFunc::MeanSquareLoss => {
                 if act_mode == Activation::Softmax {
                     return Err(Error::InvalidConfiguration {
-                        reason: "Mean Squared Loss does not support the Softmax activation function.".to_string(),
+                        reason:
+                            "Mean Squared Loss does not support the Softmax activation function."
+                                .to_string(),
                     });
                 }
             }
             LossFunc::CrossEntropyLoss => {
                 if act_mode != Activation::Softmax {
                     return Err(Error::InvalidConfiguration {
-                        reason: "Cross-Entropy Loss only supports the Softmax activation function.".to_string(),
+                        reason: "Cross-Entropy Loss only supports the Softmax activation function."
+                            .to_string(),
                     });
                 }
             }
             LossFunc::BinaryCrossEntropy => {
                 if act_mode != Activation::Sigmoid {
                     return Err(Error::InvalidConfiguration {
-                        reason: "Binary Cross-Entropy only supports the Sigmoid activation function.".to_string(),
+                        reason:
+                            "Binary Cross-Entropy only supports the Sigmoid activation function."
+                                .to_string(),
                     });
                 }
             }
@@ -728,6 +792,7 @@ impl<T: PrecisionType> ConvBlock<T> {
             mask_coeff: self.mask_coeff,
             fft_input: self.fft_input,
             fft_weights: self.fft_weights,
+            fft_output: self.fft_output,
             twiddle_lut_w: self.twiddle_lut_w,
             twiddle_lut_h: self.twiddle_lut_h,
             twiddle_last_size: self.twiddle_last_size,
@@ -740,7 +805,6 @@ impl ConvBlock<f32> {
         self.cast::<f16>(context)
     }
 }
-
 
 impl ConvBlock<f16> {
     pub fn convert_f32(self, context: &GpuContext) -> Result<ConvBlock<f32>, Error> {

@@ -44,7 +44,7 @@ fn run_pipeline() -> Result<(), Error> {
 
     let mut layers = vec![
         ConvBlock::<Precision>::new(
-            &context, ConvAlgorithm::FrequencyFFT, true, 2, &(4, 3), &mut init,
+            &context, ConvAlgorithm::Spatial, true, 2, &(4, 3), &mut init,
             KernelConfig::new((2, 3), 2, PaddingType::ReflectivePadding, (1, 2), (2, 1))?,
             KernelConfig::disable(),//KernelConfig::new((2, 2), 2, PaddingType::ZeroPadding, (2, 1), (1, 2))?,
             PoolingType::MaxPooling, 2, 3, Mish, Normalisation::BatchNorm, Regularisation::None, 0.0
@@ -77,9 +77,9 @@ fn run_pipeline() -> Result<(), Error> {
 
     //layers[0].compute_loss(&context, &Tensor4D::zeros(&context, &[0, 0, 0, 0])?, CrossEntropyLoss, Softmax)?;
 
-    let out_img = layers[0].get_features().download(&context)?;
+    let out_img = layers[0].get_prenorm_features().download(&context)?;
     let filter_img = layers[0].get_filter_weights().download(&context)?;
-    let fft_in = context.download(&layers[0].get_fft_weights().unwrap())?;
+    //let fft_in = context.download(&layers[0].get_fft_output().unwrap())?;
 
     println!("\n\nFILTERS:");
 
@@ -101,9 +101,9 @@ fn run_pipeline() -> Result<(), Error> {
 
     for n in 0..out_img.get_n() {
         for c in 0..out_img.get_c() {
-            for y in 0..3 {
-                for x in 0..6 {
-                    print!("{},", out_img.get_v((n * out_img.get_c() + c) * 18 + y * 6 + x).unwrap());
+            for y in 0..out_img.get_h() {
+                for x in 0..out_img.get_w() {
+                    print!("{},", out_img.get(n, c, y, x).unwrap());
                 }
                 println!();
             }
@@ -113,13 +113,13 @@ fn run_pipeline() -> Result<(), Error> {
         println!();
     }
 
-    println!("\n\nFFT INPUT:  LENGTH:{}", fft_in.len());
+    /*println!("\n\nFFT INPUT:  LENGTH:{}", fft_in.len());
 
-    for n in 0..3 {
-        for c in 0..2 {
+    for n in 0..2 {
+        for c in 0..3 {
             for y in 0..8 {
                 for x in 0..8 {
-                    let idx = n * 2 * 8 * 8 + c * 8 * 8 + y * 8 + x;
+                    let idx = n * 3 * 8 * 8 + c * 8 * 8 + y * 8 + x;
                     print!("{}+{}i,", fft_in[idx].re, fft_in[idx].im);
                 }
                 println!();
@@ -128,7 +128,7 @@ fn run_pipeline() -> Result<(), Error> {
         }
         println!("----------------------------------------");
         println!();
-    }
+    }*/
 
     /*
     INPUT:
@@ -224,6 +224,7 @@ fn run_pipeline() -> Result<(), Error> {
      */
 
     /*
+    Outputs using preact_features Outputs using preact_features Outputs using preact_features Outputs using preact_features
     OUTPUTS: dilation is (2, 1), padding 2 ReflectivePadding BatchNorm ==============================================================================
 -0.24861422,-0.24847089,-0.24832755,-0.24907939,-0.24922273,-0.24936607,
 -0.24744879,-0.24730545,-0.24716212,-0.24791396,-0.24805732,-0.24820065,

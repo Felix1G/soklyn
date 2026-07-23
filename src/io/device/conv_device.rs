@@ -181,6 +181,59 @@ impl GpuContext {
                 unsafe {
                     col_builder.launch(cfg)?;
                 }
+
+                let mut ifft_row_builder = self.stream.launch_builder(
+                    &self.conv_elem_mul_ifft_row_func
+                );
+
+                ifft_row_builder
+                    .arg(cur_layer.get_fft_input().unwrap())
+                    .arg(cur_layer.get_fft_weights().unwrap())
+                    .arg(cur_layer.get_fft_output().unwrap())
+                    .arg(cur_layer.get_twiddle_lut_width().unwrap())
+                    .arg(&oc_u32)
+                    .arg(&ic_u32)
+                    .arg(&fft_ow_u32)
+                    .arg(&fft_oh_u32);
+
+                let cfg = LaunchConfig {
+                    grid_dim: (n_u32 * oc_u32 * fft_oh_u32, 1, 1),
+                    block_dim: (self.tile_dim_2, 1, 1),
+                    shared_mem_bytes: fft_ow_u32 * size_of::<Complex32>() as u32,
+                };
+
+                unsafe {
+                    ifft_row_builder.launch(cfg)?;
+                }
+
+                let mut ifft_col_builder = self.stream.launch_builder(match T::precision() {
+                    Precision::FP32 => &self.conv_ifft_col_transform_func.0,
+                    Precision::FP16 => &self.conv_ifft_col_transform_func.1,
+                });
+
+                ifft_col_builder
+                    .arg(output.get_data())
+                    .arg(cur_layer.get_fft_output().unwrap())
+                    .arg(cur_layer.get_twiddle_lut_height().unwrap())
+                    .arg(cur_layer.get_filter_biases().get_data())
+                    .arg(&use_bias_u32)
+                    .arg(&oc_u32)
+                    .arg(&fft_ow_u32)
+                    .arg(&fft_oh_u32)
+                    .arg(&ow_u32)
+                    .arg(&oh_u32)
+                    .arg(&f_stride_x_u32)
+                    .arg(&f_stride_y_u32);
+
+                let cfg = LaunchConfig {
+                    grid_dim: (n_u32 * oc_u32 * ow_u32, 1, 1),
+                    block_dim: (self.tile_dim_2, 1, 1),
+                    shared_mem_bytes: fft_oh_u32 * size_of::<Complex32>() as u32,
+                };
+
+                unsafe {
+                    ifft_col_builder.launch(cfg)?;
+                }
             }
         }
 

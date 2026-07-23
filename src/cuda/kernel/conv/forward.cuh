@@ -163,8 +163,6 @@ __device__ void conv_fft_row_transform_kernel(
  * @param ic The number of input channels (channels of the incoming tensor).
  * @param ow The width of the fourier transform.
  * @param oh The height of the fourier transform.
- * @param fw The width of the filter kernel.
- * @param fh The height of the filter kernel.
  */
 extern "C" __global__ void conv_fft_col_transform_kernel(
     cuFloatComplex* __restrict__ fft_in, cuFloatComplex* __restrict__ fft_w,
@@ -173,37 +171,47 @@ extern "C" __global__ void conv_fft_col_transform_kernel(
 );
 
 /**
+ * Performs column FFT, where each column is isolated as a single 1D sample array and passed into the FFT.
+ * This function is called after the row FFT, and processes fft_in and fft_w into complete fourier transforms.
+ *
+ * @param fft_in The fourier transform for input.
+ * @param fft_w The fourier transform for filter weights.
+ * @param fft_out The fourier transform for output.
+ * @param twiddle_lut The lookup table for the twiddle factors
+ * @param oc The number of output channels (channels of fft_out, and the 'batch' of fft_w).
+ * @param ic The number of input channels (channels of the incoming tensor).
+ * @param ow The width of the fourier transform.
+ * @param oh The height of the fourier transform.
+ */
+extern "C" __global__ void conv_elem_mul_ifft_row_kernel(
+    const cuFloatComplex* __restrict__ fft_in, const cuFloatComplex* __restrict__ fft_w,
+    cuFloatComplex* __restrict__ fft_out,
+    const cuFloatComplex* __restrict__ twiddle_lut,
+    uint32_t oc, uint32_t ic, uint32_t ow, uint32_t oh
+);
+
+/**
  *
  * @tparam T  * @tparam T Either f32_t or f16_t.
  * @param prenorm_features The tensor representing the features before normalisation (after linear).
- * @param fft_in The fourier transform for input.
- * @param fft_w The fourier transform for filter weights.
  * @param b The filter bias tensor.
  * @param twiddle_lut The lookup table for the twiddle factors
  * @param use_bias If true, bias is added. Otherwise, bias is not added.
- * @param pad_mode The mode of padding used.
- * @param batches number of batches
- * @param ic The number of input channels (channels of the incoming tensor).
- * @param iw The width of the input tensor.
- * @param ih The height of the input tensor.
+ * @param oc The number of output channels.
  * @param ow The width of the fourier transform.
  * @param oh The height of the fourier transform.
- * @param fw The width of the filter kernel.
- * @param fh The height of the filter kernel.
- * @param pad The padding size.
+ * @param out_w The width of the output tensor (prenorm_features).
+ * @param out_h The height of the output tensor (prenorm_features).
  * @param stride_x The stride step size along the width (horizontal axis).
  * @param stride_y The stride step size along the height (vertical axis).
- * @param dil_x The dilation in the horizontal axis.
- * @param dil_y The dilation in the vertical axis.
  */
 template<typename T>
-__device__ void conv_ifft_out_transform_kernel(
-    T * __restrict__ prenorm_features, cuFloatComplex* __restrict__ fft_in, cuFloatComplex* __restrict__ fft_w,
+__device__ void conv_ifft_col_transform_kernel(
+    T * __restrict__ prenorm_features, cuFloatComplex* __restrict__ fft_out,
     const cuFloatComplex* __restrict__ twiddle_lut, const T * __restrict__ b,
-    uint32_t use_bias, uint32_t batches, uint32_t ic, uint32_t oc,
-    uint32_t iw, uint32_t ih, uint32_t ow, uint32_t oh, uint32_t fw, uint32_t fh,
-    uint32_t pad, uint32_t pad_mode,
-    uint32_t stride_x, uint32_t stride_y, uint32_t dil_x, uint32_t dil_y
+    uint32_t use_bias, uint32_t oc,
+    uint32_t ow, uint32_t oh, uint32_t out_w, uint32_t out_h,
+    uint32_t stride_x, uint32_t stride_y
 );
 
 /**

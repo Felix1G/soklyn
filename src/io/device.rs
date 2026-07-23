@@ -16,11 +16,15 @@ use std::sync::Arc;
 pub struct GpuContext {
     context: Arc<CudaContext>,
     stream: Arc<CudaStream>,
+
+    // Utility kernels
     cast_f32_f16_func: CudaFunction,
     cast_f16_f32_func: CudaFunction,
     broadcast_func: (CudaFunction, CudaFunction),
     gemm_func: (CudaFunction, CudaFunction),          // A * B
     geam_func: (CudaFunction, CudaFunction),          // A + B
+
+    // FFN kernel series
     forward_pass_func0: (CudaFunction, CudaFunction), // Z = WX + B
     forward_pass_func1: (CudaFunction, CudaFunction), // Normalisation
     forward_pass_func2: (CudaFunction, CudaFunction), // Activation and dropout
@@ -28,11 +32,18 @@ pub struct GpuContext {
     compute_output_layer_error_func: (CudaFunction, CudaFunction),
     compute_hidden_layer_error_func: (CudaFunction, CudaFunction),
     backward_pass_func: (CudaFunction, CudaFunction),
+
+    // CNN kernel series
     conv_forward_pass_func0: (CudaFunction, CudaFunction), // CONV Z = WX + B
     conv_forward_pass_func1: (CudaFunction, CudaFunction), // Normalisation
     conv_forward_pass_func2: (CudaFunction, CudaFunction), // Activation, Pooling, Dropout
+
+    // CNN FFT kernel series
     conv_fft_row_transform_func: (CudaFunction, CudaFunction),
     conv_fft_col_transform_func: CudaFunction,
+    conv_elem_mul_ifft_row_func: CudaFunction,
+    conv_ifft_col_transform_func: (CudaFunction, CudaFunction),
+
     tile_dim: u32,
     tile_dim_minus_1: u32,
     tile_dim_2: u32,
@@ -85,6 +96,9 @@ impl GpuContext {
         let conv_fft_row_transform_f32 = load_kernel("conv_fft_row_transform_kernel_f32");
         let conv_fft_row_transform_f16 = load_kernel("conv_fft_row_transform_kernel_f16");
         let conv_fft_col_transform_func = load_kernel("conv_fft_col_transform_kernel");
+        let conv_elem_mul_ifft_row_func = load_kernel("conv_elem_mul_ifft_row_kernel");
+        let conv_ifft_col_transform_f32 = load_kernel("conv_ifft_col_transform_kernel_f32");
+        let conv_ifft_col_transform_f16 = load_kernel("conv_ifft_col_transform_kernel_f16");
 
         let stream = CudaContext::new_stream(&context).expect("Failed to create stream");
         context
@@ -119,6 +133,8 @@ impl GpuContext {
             conv_forward_pass_func2: (conv_forward_pass_2_f32, conv_forward_pass_2_f16),
             conv_fft_row_transform_func: (conv_fft_row_transform_f32, conv_fft_row_transform_f16),
             conv_fft_col_transform_func,
+            conv_elem_mul_ifft_row_func,
+            conv_ifft_col_transform_func: (conv_ifft_col_transform_f32, conv_ifft_col_transform_f16),
             tile_dim,
             tile_dim_minus_1: tile_dim - 1,
             tile_dim_2,

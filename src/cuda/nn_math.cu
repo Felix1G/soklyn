@@ -317,4 +317,29 @@ __global__ void conv_fft_row_transform_kernel_f16(
         fft_in, fft_w, twiddle_lut, in, w, batches, ic, iw, ih, ow, oh, fw, fh, pad, pad_mode, dil_x, dil_y
     );
 }
+
+__global__ void conv_ifft_col_transform_kernel_f32(
+    f32_t* __restrict__ prenorm_features, cuFloatComplex* __restrict__ fft_out,
+    const cuFloatComplex* __restrict__ twiddle_lut, const f32_t* __restrict__ b,
+    const uint32_t use_bias, const uint32_t oc,
+    const uint32_t ow, const uint32_t oh, const uint32_t out_w, const uint32_t out_h,
+    const uint32_t stride_x, const uint32_t stride_y
+) {
+    conv_ifft_col_transform_kernel(
+        prenorm_features, fft_out, twiddle_lut, b, use_bias, oc, ow, oh, out_w, out_h, stride_x, stride_y
+    );
+}
+
+__global__ void conv_ifft_col_transform_kernel_f16(
+    f16_t* __restrict__ prenorm_features, cuFloatComplex* __restrict__ fft_out,
+    const cuFloatComplex* __restrict__ twiddle_lut, const f16_t* __restrict__ b,
+    const uint32_t use_bias, const uint32_t oc,
+    const uint32_t ow, const uint32_t oh, const uint32_t out_w, const uint32_t out_h,
+    const uint32_t stride_x, const uint32_t stride_y
+) {
+    conv_ifft_col_transform_kernel(
+        prenorm_features, fft_out, twiddle_lut, b, use_bias, oc, ow, oh, out_w, out_h, stride_x, stride_y
+    );
+}
+
 }
