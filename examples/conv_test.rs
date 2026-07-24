@@ -45,7 +45,7 @@ fn run_pipeline() -> Result<(), Error> {
     let mut layers = vec![
         ConvBlock::<Precision>::new(
             &context, ConvAlgorithm::Spatial, true, 2, &(4, 3), &mut init,
-            KernelConfig::new((2, 3), 2, PaddingType::ReflectivePadding, (1, 2), (2, 1))?,
+            KernelConfig::new((2, 3), 2, PaddingType::ReflectivePadding, (3, 2), (2, 2))?,
             KernelConfig::disable(),//KernelConfig::new((2, 2), 2, PaddingType::ZeroPadding, (2, 1), (1, 2))?,
             PoolingType::MaxPooling, 2, 3, Mish, Normalisation::BatchNorm, Regularisation::None, 0.0
         )?
@@ -79,7 +79,7 @@ fn run_pipeline() -> Result<(), Error> {
 
     let out_img = layers[0].get_prenorm_features().download(&context)?;
     let filter_img = layers[0].get_filter_weights().download(&context)?;
-    //let fft_in = context.download(&layers[0].get_fft_output().unwrap())?;
+    //let fft_in = context.download(&layers[0].get_fft_input().unwrap())?;
 
     println!("\n\nFILTERS:");
 
@@ -116,10 +116,10 @@ fn run_pipeline() -> Result<(), Error> {
     /*println!("\n\nFFT INPUT:  LENGTH:{}", fft_in.len());
 
     for n in 0..2 {
-        for c in 0..3 {
+        for c in 0..2 {
             for y in 0..8 {
                 for x in 0..8 {
-                    let idx = n * 3 * 8 * 8 + c * 8 * 8 + y * 8 + x;
+                    let idx = n * 2 * 8 * 8 + c * 8 * 8 + y * 8 + x;
                     print!("{}+{}i,", fft_in[idx].re, fft_in[idx].im);
                 }
                 println!();

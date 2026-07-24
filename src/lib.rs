@@ -1,3 +1,6 @@
+#![deny(clippy::all)]
+#![warn(clippy::pedantic)]
+
 pub mod io {
     pub mod device;
     pub mod save;
@@ -26,9 +29,6 @@ pub use util::function::*;
 #[cfg(test)]
 mod tests {
     use std::process::exit;
-    use std::time::SystemTime;
-    use crate::{ConvBlock, KernelConfig};
-    use crate::core::Tensor4D;
     use crate::ffn::FeedForwardNetwork;
     use crate::io::device::GpuContext;
     use crate::mlp::DenseBlock;

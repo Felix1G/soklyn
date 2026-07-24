@@ -104,58 +104,46 @@ __device__ __forceinline__ void dev_load_tensor_to_shared(
         cuFloatComplex fill_val = make_cuFloatComplex(0.0f, 0.0f);
 
         if (is_input) {
-            int32_t row, col;
-            if constexpr (IS_ROW_PASS) {
-                row = fixed_coord - pad_i;
-                col = static_cast<int32_t>(s_idx) - pad_i;
-            } else {
-                // column pass
-                row = static_cast<int32_t>(s_idx) - pad_i;
-                col = fixed_coord - pad_i;
-            }
-
             // ======== INPUT TENSOR BRANCH ========
-            const bool is_in_bounds = col >= 0 && col < static_cast<int32_t>(iw) &&
-                                      row >= 0 && row < static_cast<int32_t>(ih);
+            // Since only row fft loads the original input anyway, then I won't need to handle the column part :)
+            if constexpr (IS_ROW_PASS) {
+                int32_t row = fixed_coord - pad_i;
+                int32_t col = static_cast<int32_t>(s_idx) - pad_i;
 
-            if (is_in_bounds) {
-                const uint32_t in_idx = static_cast<uint32_t>(row) * iw + static_cast<uint32_t>(col);
-                if constexpr (std::is_same_v<T, cuFloatComplex>) {
-                    fill_val = base_ptr[in_idx];
-                } else {
+                const bool is_in_bounds = col >= 0 && col < static_cast<int32_t>(iw) &&
+                                          row >= 0 && row < static_cast<int32_t>(ih);
+
+                if (is_in_bounds) {
+                    const uint32_t in_idx = static_cast<uint32_t>(row) * iw + static_cast<uint32_t>(col);
                     fill_val = make_cuFloatComplex(static_cast<f32_t>(base_ptr[in_idx]), 0.0f);
-                }
-            } else if (pad_mode != 0) {
-                if constexpr (std::is_same_v<T, cuFloatComplex>) {
-                    fill_val = make_cuFloatComplex(0.0, 0.0); // padding is not supported for complex numbers
-                } else {
+                } else if (pad_mode != 0) {
                     if (col < static_cast<int32_t>(iw) + pad_i && row < static_cast<int32_t>(ih) + pad_i) {
                         fill_val = make_cuFloatComplex(
                             static_cast<f32_t>(dev_conv_apply_padding(base_ptr, pad_mode, iw, ih, col, row)), 0.0f);
-                    } else {
-                        // outside actual inputs, this part is the padding only for the fft.
-                        fill_val = make_cuFloatComplex(0.0, 0.0);
                     }
+                }
+            } else {
+                const int32_t row = static_cast<int32_t>(s_idx) - pad_i;
+                const int32_t col = fixed_coord - pad_i;
+
+
+                const bool is_in_bounds = col >= 0 && col < static_cast<int32_t>(iw) &&
+                                          row >= 0 && row < static_cast<int32_t>(ih);
+
+                if (is_in_bounds) {
+                    const uint32_t in_idx = static_cast<uint32_t>(row) * iw + static_cast<uint32_t>(col);
+                    fill_val = base_ptr[in_idx];
                 }
             }
         } else {
             // ======== FILTER WEIGHTS BRANCH ========
             // Since only row fft loads the original filter anyway, then I won't need to do handle the column part :)
             if constexpr (IS_ROW_PASS) {
-                const int32_t freq_map_col = static_cast<int32_t>(s_idx);
+                const int32_t filter_row = fixed_coord;
+                const int32_t filter_col = static_cast<int32_t>(s_idx);
 
-                const int32_t total_row    = static_cast<int32_t>(fixed_dim_size);
-                const int32_t total_col    = static_cast<int32_t>(sweep_len);
-
-                const int32_t start_row = (total_row - actual_fh) / 2;
-                const int32_t start_col = (total_col - actual_fw) / 2;
-
-                // fixed_coord is freq map row
-                const int32_t filter_row = (fixed_coord + start_row) % total_row;
-                const int32_t filter_col = (freq_map_col + start_col) % total_col;
-
-                const bool is_in_bounds = filter_row < actual_fh && filter_row % dil_y == 0 &&
-                                      filter_col < actual_fw && filter_col % dil_x == 0;
+                const bool is_in_bounds = filter_row >= 0 && filter_row < actual_fh && filter_row % dil_y == 0 &&
+                                          filter_col >= 0 && filter_col < actual_fw && filter_col % dil_x == 0;
 
                 if (is_in_bounds) {
                     const uint32_t native_row = static_cast<uint32_t>(filter_row) / dil_y;
@@ -268,9 +256,9 @@ __global__ void conv_fft_col_transform_kernel(
 
 // Each block computes a single row (samples lie horizontal). The block dimension is the tile dimension squared.
 __global__ void conv_elem_mul_ifft_row_kernel(
-    const cuFloatComplex* __restrict__ fft_in, const cuFloatComplex* __restrict__ fft_w,
-    cuFloatComplex* __restrict__ fft_out,
-    const cuFloatComplex* __restrict__ twiddle_lut,
+    const cuFloatComplex * __restrict__ fft_in, const cuFloatComplex * __restrict__ fft_w,
+    cuFloatComplex * __restrict__ fft_out,
+    const cuFloatComplex * __restrict__ twiddle_lut,
     const uint32_t oc, const uint32_t ic, const uint32_t ow, const uint32_t oh
 ) {
     extern __shared__ cuFloatComplex shared_fft_mem[];
@@ -294,7 +282,8 @@ __global__ void conv_elem_mul_ifft_row_kernel(
             const uint32_t w_idx = dev_nchw_idx(ic, oh, ow, oc_idx, ic_idx, row_idx, s_idx);
             const uint32_t in_idx = dev_nchw_idx(ic, oh, ow, batch_idx, ic_idx, row_idx, s_idx);
 
-            val = cuCaddf(val, cuCmulf(fft_in[in_idx], fft_w[w_idx]));
+            // Conjugating the weight FFT negates its spatial phase angle, effectively centering the top-left aligned filter and matching deep learning cross-correlation.
+            val = cuCaddf(val, cuCmulf(fft_in[in_idx], cuConjf(fft_w[w_idx])));
         }
 
         // save to shared memory
@@ -322,8 +311,8 @@ __global__ void conv_elem_mul_ifft_row_kernel(
 // The block dimension is the tile dimension squared.
 template<typename T>
 __device__ void conv_ifft_col_transform_kernel(
-    T * __restrict__ prenorm_features, cuFloatComplex* __restrict__ fft_out,
-    const cuFloatComplex* __restrict__ twiddle_lut, const T * __restrict__ b,
+    T * __restrict__ prenorm_features, cuFloatComplex * __restrict__ fft_out,
+    const cuFloatComplex * __restrict__ twiddle_lut, const T * __restrict__ b,
     const uint32_t use_bias, const uint32_t oc,
     const uint32_t ow, const uint32_t oh, const uint32_t out_w, const uint32_t out_h,
     const uint32_t stride_x, const uint32_t stride_y
@@ -341,7 +330,7 @@ __device__ void conv_ifft_col_transform_kernel(
     const uint32_t oc_idx = kernel_idx % oc;
 
     // load values into shared memory
-    const cuFloatComplex* fft_ptr = fft_out + kernel_idx * oh * ow;
+    const cuFloatComplex *fft_ptr = fft_out + kernel_idx * oh * ow;
     for (uint32_t s_idx = thread; s_idx < oh; s_idx += block_dim) {
         const uint32_t br_idx = dev_bit_reverse(s_idx, log2_N);
         shared_fft_mem[br_idx] = fft_ptr[s_idx * ow + col_idx];

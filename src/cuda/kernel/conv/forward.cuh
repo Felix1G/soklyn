@@ -10,7 +10,7 @@
 
 template<typename T>
 __device__ __forceinline__ T dev_conv_apply_padding(
-    T* in_ptr, uint32_t pad_mode, uint32_t iw, uint32_t ih, int32_t gw, int32_t gh
+    T* in_ptr, const uint32_t pad_mode, const uint32_t iw, const uint32_t ih, int32_t gw, int32_t gh
 ) {
     if (pad_mode == 1) {
         // Reflective
@@ -46,8 +46,8 @@ __device__ void dev_conv_read_to_shared_memory(
     uint32_t act = 0, const f32_t leaky_relu_coeff = 0.0f, T* __restrict__ postact_features = nullptr
 ) {
     for (uint32_t tile_idx = tid; tile_idx < total_tile_elems; tile_idx += threads_per_block) {
-        uint32_t local_h = tile_idx / tile_stride;
-        uint32_t local_w = tile_idx % tile_stride;
+        const uint32_t local_h = tile_idx / tile_stride;
+        const uint32_t local_w = tile_idx % tile_stride;
         if (local_w >= tile_w) continue;
 
         int32_t gh = in_h_start + static_cast<int32_t>(local_h);
@@ -171,8 +171,8 @@ extern "C" __global__ void conv_fft_col_transform_kernel(
 );
 
 /**
- * Performs column FFT, where each column is isolated as a single 1D sample array and passed into the FFT.
- * This function is called after the row FFT, and processes fft_in and fft_w into complete fourier transforms.
+ * Performs row IFFT, where each row is isolated as a single 1D frequency array and the values
+ * are obtained from the sum of the element multiplication in multiple channels, then passed into the IFFT.
  *
  * @param fft_in The fourier transform for input.
  * @param fft_w The fourier transform for filter weights.
@@ -191,6 +191,8 @@ extern "C" __global__ void conv_elem_mul_ifft_row_kernel(
 );
 
 /**
+ * Performs column IFFT, where each relevant column is isolated as a single 1D frequency array and passed into the IFFT.
+ * Then, it is normalised and a bias is added.
  *
  * @tparam T  * @tparam T Either f32_t or f16_t.
  * @param prenorm_features The tensor representing the features before normalisation (after linear).
