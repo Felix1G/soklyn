@@ -1,9 +1,9 @@
-use rand_chacha::ChaCha8Rng;
-use rand_chacha::rand_core::{RngCore, SeedableRng};
-use crate::{getter, getter_copy};
 use crate::log::Error;
 use crate::util::function::Optimiser::{Adam, SGD};
 use crate::util::r#type::PrecisionType;
+use crate::{getter, getter_copy};
+use rand_chacha::rand_core::{RngCore, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 
 /// Regularisation is applied right before the optimiser.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -30,7 +30,7 @@ pub enum Regularisation {
 
 impl Regularisation {
     /// IMPORTANT: 0 is for NO regularisation.
-    pub(crate) fn ordinal(&self) -> usize {
+    pub(crate) fn ordinal(self) -> usize {
         match self {
             Self::None => 0,
             Self::L1Regular { regu_coeff: _ } => 1,
@@ -53,21 +53,21 @@ pub enum Normalisation {
     ///
     /// Applied across the feature dimension for each sample independently.
     LayerNorm,
-    /// Scales activations across the entire batch dimension. For BatchNorm, linear biases are
+    /// Scales activations across the entire batch dimension. For [`BatchNorm`], linear biases are
     /// not considered i.e. removed from calculation due to the linear bias being eliminated from the mathematical formula.
     ///
     /// Applied to each individual feature independently across all samples in a batch.
-    BatchNorm
+    BatchNorm,
 }
 
 impl Normalisation {
-    /// IMPORTANT: 0 is for NO normalisation.
-    pub(crate) fn ordinal(&self) -> usize {
+    #[must_use]
+    pub(crate) fn ordinal(self) -> usize {
         match self {
             Self::Disabled => 0,
             Self::RMSNorm => 1,
             Self::LayerNorm => 2,
-            Self::BatchNorm => 3
+            Self::BatchNorm => 3,
         }
     }
 }
@@ -80,7 +80,7 @@ pub enum Optimiser {
     ///
     /// # Parameters
     /// * `v_coeff` - The momentum coefficient which is the amount of 'friction' on the momentum.
-    /// If set to `0.0`, momentum is turned off and no data for momentum will be stored.
+    ///   If set to `0.0`, momentum is turned off and no data for momentum will be stored.
     /// * `nesterov` - If set to true, uses Nesterov Accelerated Gradient.
     SGD { v_coeff: f32, nesterov: bool },
 
@@ -92,14 +92,26 @@ pub enum Optimiser {
     /// * `m_coeff` - The first moment coefficient which is the amount of 'friction' on the momentum.
     /// * `v_coeff` - The second moment coefficient which controls how quickly past gradient magnitudes adapt.
     /// * `epsilon` - A very small value to prevent zero division.
-    Adam { m_coeff: f32, v_coeff: f32, epsilon: f32 }
+    Adam {
+        m_coeff: f32,
+        v_coeff: f32,
+        epsilon: f32,
+    },
 }
 
 impl Optimiser {
+    #[must_use]
     pub(crate) fn ordinal(&self) -> usize {
         match self {
-            SGD { v_coeff: _, nesterov: _ } => 0,
-            Adam { m_coeff: _, v_coeff: _, epsilon: _ } => 1,
+            SGD {
+                v_coeff: _,
+                nesterov: _,
+            } => 0,
+            Adam {
+                m_coeff: _,
+                v_coeff: _,
+                epsilon: _,
+            } => 1,
         }
     }
 }
@@ -122,21 +134,22 @@ pub enum Activation {
     /// Recommended to use He initialisations.
     ///
     /// # Parameters
-    /// * `coeff` - LeakyReLU negative coefficient (`coeff * x`).
+    /// * `coeff` - [`LeakyReLU`] negative coefficient (`coeff * x`).
     LeakyReLU { coeff: f32 },
     /// Squeezes any real-valued input into a smooth, continuous range between **-1.0 and 1.0**.
     Tanh,
     /// Converts the logits into a probability distribution, ensuring all outputs range between '0.0' and '1.0' (inclusive) and sum up to exactly '1.0'.
     Softmax,
-    /// Multiplies the input by its own sigmoid value to create a smooth, non-monotonic variant of ReLU that avoids dying neurons.
+    /// Multiplies the input by its own sigmoid value to create a smooth, non-monotonic variant of [`ReLU`] that avoids dying neurons.
     /// Recommended to use Xavier initialisations and a lower learning rate.
     SiLU,
     /// Multiplies the input by the hyperbolic tangent of its softplus transformation, offering a deeply smooth negative pocket for advanced gradient flow.
     /// Recommended to use Xavier initialisations and a lower learning rate.
-    Mish
+    Mish,
 }
 
 impl Activation {
+    #[must_use]
     pub fn ordinal(&self) -> usize {
         match self {
             Self::Identity => 0,
@@ -146,7 +159,7 @@ impl Activation {
             Self::Tanh => 4,
             Self::Softmax => 5,
             Self::SiLU => 6,
-            Self::Mish => 7
+            Self::Mish => 7,
         }
     }
 }
@@ -171,8 +184,8 @@ pub enum LossFunc {
 /// # Classes
 /// * [`InitXavierUniformFunc`] - Initialises weights from a uniform distribution scaled by the sum of input and output dimensions, ideal for symmetric activations like Tanh.
 /// * [`InitXavierNormalFunc`] - Initialises weights from a zero-mean normal distribution scaled by the sum of input and output dimensions, ideal for symmetric activations like Tanh.
-/// * [`InitHeUniformFunc`] - Initialises weights from a uniform distribution scaled strictly by the input dimensions to preserve signal variance when using ReLU activations.
-/// * [`InitHeNormalFunc`] - Initialises weights from a zero-mean normal distribution scaled strictly by the input dimensions to preserve signal variance when using ReLU activations.
+/// * [`InitHeUniformFunc`] - Initialises weights from a uniform distribution scaled strictly by the input dimensions to preserve signal variance when using [`ReLU`] activations.
+/// * [`InitHeNormalFunc`] - Initialises weights from a zero-mean normal distribution scaled strictly by the input dimensions to preserve signal variance when using [`ReLU`] activations.
 /// * [`InitZeroFunc`] - Initialises to `0.0`.
 pub trait InitFunc {
     fn new<T: PrecisionType>(seed: u64, mul: f32) -> Self;
@@ -181,28 +194,34 @@ pub trait InitFunc {
 
 pub struct InitXavierUniformFunc {
     rng: ChaCha8Rng,
-    factor: f32
+    factor: f32,
 }
 
 pub struct InitXavierNormalFunc {
     rng: ChaCha8Rng,
-    factor: f32
+    factor: f32,
 }
 
 pub struct InitHeUniformFunc {
     rng: ChaCha8Rng,
-    factor: f32
+    factor: f32,
 }
 
 pub struct InitHeNormalFunc {
     rng: ChaCha8Rng,
-    factor: f32
+    factor: f32,
 }
 
 /// Initialises to `0.0`.
 pub struct InitZeroFunc {}
 
-fn normal_dist<T: PrecisionType>(total: usize, rng: &mut ChaCha8Rng, factor: f32, std: f32) -> Vec<T> {
+#[allow(clippy::cast_precision_loss)]
+fn normal_dist<T: PrecisionType>(
+    total: usize,
+    rng: &mut ChaCha8Rng,
+    factor: f32,
+    std: f32,
+) -> Vec<T> {
     (0..total)
         .map(|_| {
             let u1 = (rng.next_u32() as f32 + 1.0) / (u32::MAX as f32 + 1.0);
@@ -213,7 +232,13 @@ fn normal_dist<T: PrecisionType>(total: usize, rng: &mut ChaCha8Rng, factor: f32
         .collect()
 }
 
-fn uniform_dist<T: PrecisionType>(total: usize, rng: &mut ChaCha8Rng, factor: f32, limit: f32) -> Vec<T> {
+#[allow(clippy::cast_precision_loss)]
+fn uniform_dist<T: PrecisionType>(
+    total: usize,
+    rng: &mut ChaCha8Rng,
+    factor: f32,
+    limit: f32,
+) -> Vec<T> {
     (0..total)
         .map(|_| {
             let raw = rng.next_u32() as f32 / u32::MAX as f32;
@@ -222,11 +247,12 @@ fn uniform_dist<T: PrecisionType>(total: usize, rng: &mut ChaCha8Rng, factor: f3
         .collect()
 }
 
+#[allow(clippy::cast_precision_loss)]
 impl InitFunc for InitXavierUniformFunc {
     fn new<T: PrecisionType>(seed: u64, factor: f32) -> Self {
         Self {
             rng: ChaCha8Rng::seed_from_u64(seed),
-            factor
+            factor,
         }
     }
 
@@ -236,11 +262,12 @@ impl InitFunc for InitXavierUniformFunc {
     }
 }
 
+#[allow(clippy::cast_precision_loss)]
 impl InitFunc for InitXavierNormalFunc {
     fn new<T: PrecisionType>(seed: u64, factor: f32) -> Self {
         Self {
             rng: ChaCha8Rng::seed_from_u64(seed),
-            factor
+            factor,
         }
     }
 
@@ -249,11 +276,13 @@ impl InitFunc for InitXavierNormalFunc {
         normal_dist(len, &mut self.rng, self.factor, std)
     }
 }
+
+#[allow(clippy::cast_precision_loss)]
 impl InitFunc for InitHeUniformFunc {
     fn new<T: PrecisionType>(seed: u64, factor: f32) -> Self {
         Self {
             rng: ChaCha8Rng::seed_from_u64(seed),
-            factor
+            factor,
         }
     }
 
@@ -263,11 +292,12 @@ impl InitFunc for InitHeUniformFunc {
     }
 }
 
+#[allow(clippy::cast_precision_loss)]
 impl InitFunc for InitHeNormalFunc {
     fn new<T: PrecisionType>(seed: u64, factor: f32) -> Self {
         Self {
             rng: ChaCha8Rng::seed_from_u64(seed),
-            factor
+            factor,
         }
     }
 
@@ -306,7 +336,7 @@ pub enum PaddingType {
 }
 
 impl PaddingType {
-    pub(crate) fn ordinal(&self) -> usize {
+    pub(crate) fn ordinal(self) -> usize {
         match self {
             Self::ZeroPadding => 0,
             Self::ReflectivePadding => 1,
@@ -329,6 +359,7 @@ impl KernelConfig {
     /// Creates a disabled manual kernel configuration for either filters or pooling.
     ///
     /// Dimension is set to `(1, 1)`, `padding` is set to `0`, and stride is set to `(1, 1)`
+    #[must_use]
     pub fn disable() -> Self {
         Self {
             enable: false,
@@ -349,10 +380,18 @@ impl KernelConfig {
     /// * `pad` - The number of padding layers to apply symmetrically along both spatial dimensions (width and height).
     /// * `pad_type` - The type of padding to use. See [`PaddingType`].
     /// * `stride` - Discrete step increment for the sliding window.
-    /// `stride.0` represents the x-axis (width) while `stride.1` represents the y-axis (height).
+    ///   `stride.0` represents the x-axis (width) while `stride.1` represents the y-axis (height).
     /// * `dilation` - The spacing between kernel elements, inserting `dilation - 1` spaces in between.
-    pub fn new(dimension: (usize, usize), pad: usize, pad_type: PaddingType,
-               stride: (usize, usize), dilation: (usize, usize)) -> Result<Self, Error> {
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if the configuration is invalid.
+    pub fn new(
+        dimension: (usize, usize),
+        pad: usize,
+        pad_type: PaddingType,
+        stride: (usize, usize),
+        dilation: (usize, usize),
+    ) -> Result<Self, Error> {
         if dimension.0 == 0 {
             return Err(Error::InvalidConfiguration {
                 reason: String::from("Kernel width cannot be 0."),
@@ -392,15 +431,22 @@ impl KernelConfig {
             auto_pad: false,
             pad_type,
             stride,
-            dilation
+            dilation,
         })
     }
 
     /// Creates an automatic kernel configuration for either filters or pooling that dynamically computes the required
     /// padding size at execution time, ensuring that the filter covers all spatial boundary
     /// elements and the output dimensions are ceiling-divided by the stride value.
-    pub fn auto_pad(dimension: (usize, usize), pad_type: PaddingType,
-                    stride: (usize, usize), dilation: (usize, usize)) -> Result<Self, Error> {
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if the configuration is invalid.
+    pub fn auto_pad(
+        dimension: (usize, usize),
+        pad_type: PaddingType,
+        stride: (usize, usize),
+        dilation: (usize, usize),
+    ) -> Result<Self, Error> {
         Self::new(dimension, 0, pad_type, stride, dilation)
     }
 
@@ -411,31 +457,23 @@ impl KernelConfig {
     getter!(pub get_dilation, dilation, (usize, usize));
     getter_copy!(pub(crate) is_enabled, enable, bool);
 
-    pub(crate) fn auto_pad_val(
+    /*pub(crate) fn auto_pad_val(
         &self,
         dim: &(usize, usize),
     ) -> (usize, usize) {
         if self.auto_pad {
             let out = self.elements_from_length(dim);
             let needed_w = (out.0 - 1) * self.stride.0 + self.dimension.0;
-            let pad_w = if needed_w > dim.0 {
-                needed_w - dim.0
-            } else {
-                0
-            };
+            let pad_w = needed_w.saturating_sub(dim.0);
 
             let needed_h = (out.1 - 1) * self.stride.1 + self.dimension.1;
-            let pad_h = if needed_h > dim.1 {
-                needed_h - dim.1
-            } else {
-                0
-            };
+            let pad_h = needed_h.saturating_sub(dim.1);
 
             (pad_w, pad_h)
         } else {
             (0, 0)
         }
-    }
+    }*/
 
     #[inline]
     pub(crate) fn actual_width(&self) -> usize {
@@ -457,12 +495,9 @@ impl KernelConfig {
     /// * `len` - The dimension of the input (spatial width, spatial height).
     pub(crate) fn elements_from_length(&self, len: &(usize, usize)) -> (usize, usize) {
         if self.auto_pad {
-            (
-                (len.0 + self.stride.0 - 1) / self.stride.0,
-                (len.1 + self.stride.1 - 1) / self.stride.1
-            )
+            (len.0.div_ceil(self.stride.0), len.1.div_ceil(self.stride.1))
         } else {
-            let padded_len = self.padded_length(&len);
+            let padded_len = self.padded_length(len);
 
             let size_x = self.actual_width();
             let size_y = self.actual_height();
@@ -501,12 +536,12 @@ pub enum PoolingType {
 }
 
 impl PoolingType {
-    pub(crate) fn ordinal(&self) -> usize {
+    pub(crate) fn ordinal(self) -> usize {
         match self {
             PoolingType::NoPooling => 0,
             PoolingType::MaxPooling => 1,
             PoolingType::SumPooling => 2,
-            PoolingType::AveragePooling => 3
+            PoolingType::AveragePooling => 3,
         }
     }
 }
@@ -526,5 +561,5 @@ pub enum ConvAlgorithm {
     /// O(N² log N) element-wise multiplications.
     ///
     /// Ideal for very large, dense kernel sizes.
-    FrequencyFFT
+    FrequencyFFT,
 }

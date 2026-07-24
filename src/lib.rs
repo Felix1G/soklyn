@@ -2,49 +2,55 @@
 #![warn(clippy::pedantic)]
 
 pub mod io {
+    #[allow(clippy::similar_names)]
     pub mod device;
-    pub mod save;
     pub(crate) mod safetensor;
+    pub mod save;
 }
 
 pub mod util {
-    pub mod scheduler;
-    pub mod r#type;
+    pub mod context;
     pub mod core;
     pub mod function;
     pub mod log;
+    pub mod scheduler;
+    pub mod r#type;
 }
 
-pub mod mlp;
-pub mod ffn;
 pub mod conv;
+pub mod ffn;
+pub mod mlp;
 
-pub use mlp::*;
-pub use ffn::*;
 pub use conv::*;
-pub use util::*;
-pub use util::r#type::*;
+pub use ffn::*;
+pub use mlp::*;
 pub use util::function::*;
+pub use util::context::*;
+pub use util::r#type::*;
+pub use util::*;
 
 #[cfg(test)]
 mod tests {
-    use std::process::exit;
+    use crate::{LayerInitConfig, LossConfig, MultiLayerTrainContext};
     use crate::ffn::FeedForwardNetwork;
     use crate::io::device::GpuContext;
     use crate::mlp::DenseBlock;
     use crate::util::core::Tensor2D;
-    use crate::util::function::{Activation, InitFunc, InitHeUniformFunc, LossFunc, Normalisation, Regularisation};
     use crate::util::function::Optimiser::SGD;
+    use crate::util::function::{
+        Activation, InitFunc, InitHeUniformFunc, LossFunc, Normalisation, Regularisation,
+    };
     use crate::util::log::Error;
+    use std::process::exit;
 
     const BATCH_SIZE: usize = 64;
 
     fn gen_input(context: &GpuContext) -> Tensor2D<f32> {
-        Tensor2D::zeros(&context, &[64, 32]).unwrap()
+        Tensor2D::zeros(context, &[64, 32]).unwrap()
     }
 
     fn gen_target(context: &GpuContext) -> Tensor2D<f32> {
-        Tensor2D::zeros(&context, &[64, 4]).unwrap()
+        Tensor2D::zeros(context, &[64, 4]).unwrap()
     }
 
     #[test]
@@ -66,13 +72,33 @@ mod tests {
 
         // 3. Create the layers. For example, a 32-16-8-4 network.
         // The activation of the last layer (the output layer) must be set to Identity
+        let layer_config = LayerInitConfig {
+            normalisation: Normalisation::Disabled,
+            activation: Activation::LeakyReLU { coeff: 0.01 },
+            regularisation: Regularisation::None,
+            mask_coeff: 0.1,
+        };
+
         let layers: Vec<DenseBlock<f32>> = vec![
-            DenseBlock::new(&context, true, 32, 16, BATCH_SIZE, &mut init,
-                            Normalisation::Disabled, Activation::LeakyReLU { coeff: 0.01 }, Regularisation::None, 0.1)?,
-            DenseBlock::new(&context, true, 16, 8, BATCH_SIZE, &mut init,
-                            Normalisation::Disabled, Activation::LeakyReLU  { coeff: 0.01 }, Regularisation::None, 0.1)?,
-            DenseBlock::new(&context, true, 8, 4, BATCH_SIZE, &mut init,
-                            Normalisation::Disabled, Activation::Identity, Regularisation::None, 0.1)?,
+            DenseBlock::new_with_config(
+                &context,
+                true,
+                32,
+                16,
+                BATCH_SIZE,
+                &mut init,
+                &layer_config,
+            )?,
+            DenseBlock::new_with_config(
+                &context,
+                true,
+                16,
+                8,
+                BATCH_SIZE,
+                &mut init,
+                &layer_config,
+            )?,
+            DenseBlock::new(&context, true, 8, 4, BATCH_SIZE, &mut init)?,
         ];
 
         // 4. Wrap the layers inside the Feed Forward Network to simplify the process.
@@ -82,12 +108,30 @@ mod tests {
         // Here, the input tensor takes size (BATCH SIZE, 32) since there are 32 input neurons.
         // Whereas, the target tensor takes size (BATCH SIZE, 4) since there are 4 output neurons.
         let input = &gen_input(&context); // This is the input to your network
-        let sgd = SGD { v_coeff: 0.9, nesterov: true }; // Stochastic Gradient Descent with Nesterov momentum
-        let outputs = network.forward(&context, &input, BATCH_SIZE, true, 1)?;
+        let sgd = SGD {
+            v_coeff: 0.9,
+            nesterov: true,
+        }; // Stochastic Gradient Descent with Nesterov momentum
+        let outputs = network.forward(&context, input, BATCH_SIZE, true, 1)?;
 
-        network.backward(&context, &outputs, &gen_target(&context), &input,
-                         LossFunc::CrossEntropyLoss, Activation::Softmax, BATCH_SIZE,
-                         &[sgd, sgd, sgd], &[sgd, sgd, sgd], 0.01, f32::MAX, 1)?;
+        network.backward(
+            &context,
+            &outputs,
+            &gen_target(&context),
+            input,
+            &LossConfig {
+                loss_func: LossFunc::CrossEntropyLoss,
+                activation: Activation::Softmax,
+            },
+            &MultiLayerTrainContext {
+                batch_size: BATCH_SIZE,
+                optimisers: &[sgd, sgd, sgd],
+                norm_optimisers: &[sgd, sgd, sgd],
+                learn_rate: 0.01,
+                grad_clamp: f32::MAX,
+            },
+            1,
+        )?;
 
         Ok(())
     }

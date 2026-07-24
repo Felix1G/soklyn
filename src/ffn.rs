@@ -1,10 +1,11 @@
+use crate::LossConfig;
+use crate::getter;
 use crate::io::device::GpuContext;
 use crate::mlp::DenseBlock;
+use crate::util::context::MultiLayerTrainContext;
 use crate::util::core::Tensor2D;
 use crate::util::log::Error;
 use crate::util::r#type::PrecisionType;
-use crate::getter;
-use crate::util::function::{Activation, LossFunc, Optimiser};
 
 pub struct FeedForwardNetwork<T: PrecisionType> {
     layers: Vec<DenseBlock<T>>,
@@ -17,11 +18,9 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
     /// # Arguments
     /// * `layers` - A vector of `DenseBlock<T>` representing the layers of the network.
     /// * `inputs` - The total expected feature dimension length of a single raw input sample.
+    #[must_use]
     pub fn new(layers: Vec<DenseBlock<T>>, inputs: usize) -> Self {
-        Self {
-            layers,
-            inputs,
-        }
+        Self { layers, inputs }
     }
 
     /// Executes a sequential forward execution pass.
@@ -35,6 +34,9 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
     ///
     /// # Returns
     /// A reference to a vector of outputs from each layer in the network.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if dense block forward propagation fails.
     pub fn forward<'a>(
         &'a self,
         context: &GpuContext,
@@ -65,6 +67,9 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
     ///
     /// # Returns
     /// A **copy** of the output tensor from the very last layer.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if dense block forward propagation or GPU memory allocation fails.
     pub fn forward_raw(
         &self,
         context: &GpuContext,
@@ -85,7 +90,7 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
                     .to_string(),
             })?;
 
-        Ok((*final_output).clone(context))
+        (*final_output).clone(context)
     }
 
     /// Executes a sequential backward execution pass.
@@ -93,41 +98,35 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
     /// # Arguments
     /// * `context` - GPU Context. See [`GpuContext`].
     /// * `target` - A [`Tensor2D<T>`] with size `(batch size, output features)` representing
-    /// the current target batch.
+    ///   the current target batch.
     /// * `input` - A [`Tensor2D<T>`] that contains the input to this layer during the forward pass.
-    /// * `out_loss_func` - See [`LossFunc`] for the available error functions.
-    /// * `out_act_mode` - See [`Activation`] for the available activation functions.
-    /// * `batch_size` - Size of the batch.
-    /// * `optimisers` - These [`Optimiser`] is used for linear weights and biases.
-    /// * `norm_optimiser` - These [`Optimiser`] is used for normalisation weights and biases.
-    /// * `learn_rate` - The learning rate of the network. Ideally, it should be between `0.0` exclusive and `1.0` inclusive.
-    /// * `clamp` - Clamps gradient values between -`clamp` and +`clamp`. Pass [`f32::MAX`] to turn off clamping.
+    /// * `loss_config` - See [`LossConfig`].
+    /// * `train_ctx` - Information and hyperparameters for training.
     /// * `step` - The current training iteration step.
     ///
     /// # Returns
     /// A **copy** of the output tensor from the very last layer.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if dense block back propagation fails.
+    #[allow(clippy::too_many_arguments)]
     pub fn backward(
         &self,
         context: &GpuContext,
         outputs: &[&Tensor2D<T>],
         target: &Tensor2D<T>,
         input: &Tensor2D<T>,
-        out_loss_func: LossFunc,
-        out_act_mode: Activation,
-        batch_size: usize,
-        optimisers: &[Optimiser],
-        norm_optimisers: &[Optimiser],
-        lr: f32,
-        clamp: f32,
+        loss_config: &LossConfig,
+        train_ctx: &MultiLayerTrainContext,
         step: usize,
     ) -> Result<(), Error> {
         let num_layers = self.layers.len();
-        if outputs.len() != num_layers || optimisers.len() != num_layers {
+        if outputs.len() != num_layers || train_ctx.optimisers.len() != num_layers {
             return Err(Error::InvalidConfiguration {
                 reason: format!(
                     "Backward pass expects exactly {num_layers} activation vectors and optimizers. Found {} outputs, {} optimisers.",
                     outputs.len(),
-                    optimisers.len()
+                    train_ctx.optimisers.len()
                 ),
             });
         }
@@ -140,21 +139,12 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
         };
 
         // Compute output layer
-        self.layers[last_idx].compute_loss(
-            context,
-            target,
-            out_loss_func,
-            out_act_mode
-        )?;
+        self.layers[last_idx].compute_loss(context, target, loss_config)?;
 
         self.layers[last_idx].backward_output(
             context,
             head_input,
-            batch_size,
-            &optimisers[last_idx],
-            &norm_optimisers[last_idx],
-            lr,
-            clamp,
+            &train_ctx.get_train_context(last_idx),
             step,
         )?;
 
@@ -167,11 +157,7 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
                 context,
                 next_layer,
                 layer_input,
-                batch_size,
-                &optimisers[i],
-                &norm_optimisers[i],
-                lr,
-                clamp,
+                &train_ctx.get_train_context(i),
                 step,
             )?;
         }
@@ -182,7 +168,14 @@ impl<T: PrecisionType> FeedForwardNetwork<T> {
     getter!(pub get_layers, layers, Vec<DenseBlock<T>>);
 
     /// Returns the total number of layers in the network.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.layers.len()
+    }
+
+    /// Returns true if neural network is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.layers.is_empty()
     }
 }

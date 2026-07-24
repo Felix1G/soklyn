@@ -1,3 +1,4 @@
+use crate::TrainContext;
 use crate::core::{scramble_seed, Tensor2D};
 use crate::io::device::GpuContext;
 use crate::log::Error;
@@ -22,7 +23,10 @@ impl GpuContext {
         let norm = cur_layer.get_normalisation();
         let act = cur_layer.get_activation();
         let mask_coeff = cur_layer.get_mask_coeff();
-        let seed = scramble_seed(step as u32, cur_layer.get_weights().get_id() as u32);
+        let seed = scramble_seed(
+            u32::try_from(step)?,
+            u32::try_from(cur_layer.get_weights().get_id())?,
+        );
         let use_bias = *norm != Normalisation::BatchNorm;
 
         let leaky_relu_coeff = match act {
@@ -30,13 +34,13 @@ impl GpuContext {
             _ => 0.0,
         };
 
-        let use_bias_u32 = use_bias as u32;
-        let m_u32 = batch_size as u32;
-        let n_u32 = input.cols() as u32;
-        let wc_u32 = wc as u32;
-        let norm_mode_u32 = norm.ordinal() as u32;
-        let act_mode_u32 = act.ordinal() as u32;
-        let use_dropout_u32 = use_dropout as u32;
+        let use_bias_u32 = u32::from(use_bias);
+        let m_u32 = u32::try_from(batch_size)?;
+        let n_u32 = u32::try_from(input.cols())?;
+        let wc_u32 = u32::try_from(wc)?;
+        let norm_mode_u32 = u32::try_from(norm.ordinal())?;
+        let act_mode_u32 = u32::try_from(act.ordinal())?;
+        let use_dropout_u32 = u32::from(use_dropout);
 
         let mut builder = self.stream.launch_builder(match T::precision() {
             Precision::FP32 => &self.forward_pass_func0.0,
@@ -58,7 +62,11 @@ impl GpuContext {
             .arg(&wc_u32)
             .arg(&self.tile_dim);
 
-        let cfg = self.calculate_cfg2d(wc, batch_size, 2 * self.tile_dim_2 * size_of::<T>() as u32);
+        let cfg = self.calculate_cfg2d(
+            wc,
+            batch_size,
+            2 * self.tile_dim_2 * u32::try_from(size_of::<T>())?,
+        )?;
 
         unsafe {
             builder.launch(cfg)?;
@@ -90,7 +98,7 @@ impl GpuContext {
             };
 
             let cfg = LaunchConfig {
-                grid_dim: (grid_x as u32, 1, 1),
+                grid_dim: (u32::try_from(grid_x)?, 1, 1),
                 block_dim: (self.tile_dim_2, 1, 1),
                 shared_mem_bytes: self.tile_dim_2 * 4,
             };
@@ -119,7 +127,7 @@ impl GpuContext {
             .arg(&mask_coeff)
             .arg(&seed);
 
-        let cfg = self.calculate_cfg2d(wc, batch_size, 0);
+        let cfg = self.calculate_cfg2d(wc, batch_size, 0)?;
 
         unsafe {
             builder.launch(cfg)?;
@@ -144,11 +152,11 @@ impl GpuContext {
         let m = out_tensor.rows();
         let n = cur_layer.get_weights().cols();
 
-        let m_u32 = m as u32;
-        let n_u32 = n as u32;
+        let m_u32 = u32::try_from(m)?;
+        let n_u32 = u32::try_from(n)?;
         let err_mode_u32 = err_mode as u32;
-        let norm_mode_u32 = cur_layer.get_normalisation().ordinal() as u32;
-        let act_mode_u32 = activation.ordinal() as u32;
+        let norm_mode_u32 = u32::try_from(cur_layer.get_normalisation().ordinal())?;
+        let act_mode_u32 = u32::try_from(activation.ordinal())?;
 
         let leaky_relu_coeff = match activation {
             Activation::LeakyReLU { coeff } => coeff,
@@ -157,7 +165,7 @@ impl GpuContext {
 
         // Run softmax if needed first
         if activation == Activation::Softmax {
-            let cols_u32 = out_tensor.cols() as u32;
+            let cols_u32 = u32::try_from(out_tensor.cols())?;
             let mut softmax_builder = self.stream.launch_builder(match T::precision() {
                 Precision::FP32 => &self.softmax_func.0,
                 Precision::FP16 => &self.softmax_func.1,
@@ -169,7 +177,7 @@ impl GpuContext {
                 .arg(&cols_u32);
 
             let softmax_cfg = LaunchConfig {
-                grid_dim: (m as u32, 1, 1),
+                grid_dim: (u32::try_from(m)?, 1, 1),
                 block_dim: (self.tile_dim_2, 1, 1),
                 shared_mem_bytes: 0,
             };
@@ -190,7 +198,7 @@ impl GpuContext {
             .arg(cur_layer.get_preact_outputs().get_data())
             .arg(target.get_data());
 
-        self.master_tensor(
+        Self::master_tensor(
             &mut err_builder,
             cur_layer.get_master_norm_weights(),
             cur_layer.get_norm_weights(),
@@ -211,7 +219,7 @@ impl GpuContext {
             .arg(&act_mode_u32)
             .arg(&leaky_relu_coeff);
 
-        let cfg = self.calculate_cfg2d(n, m, 0);
+        let cfg = self.calculate_cfg2d(n, m, 0)?;
 
         unsafe {
             err_builder.launch(cfg)?;
@@ -222,15 +230,12 @@ impl GpuContext {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn gpu_backward_pass<T: PrecisionType>(
         &self,
         cur_layer: &DenseBlock<T>,
-        optimiser: &Optimiser,
-        norm_optimiser: &Optimiser,
         input: &Tensor2D<T>,
-        batch_size: usize,
-        lr: f32,
-        max_grad_norm: f32,
+        train_ctx: &TrainContext,
         step: usize,
     ) -> Result<(), Error> {
         let n = cur_layer.get_weights().cols();
@@ -239,21 +244,21 @@ impl GpuContext {
         let regularisation = cur_layer.get_regularisation();
         let use_bias = *norm != Normalisation::BatchNorm;
 
-        let use_bias_u32 = use_bias as u32;
-        let norm_mode_u32 = norm.ordinal() as u32;
-        let m_u32 = batch_size as u32;
-        let n_u32 = n as u32;
-        let wr_u32 = wr as u32;
-        let optimiser_u32 = optimiser.ordinal() as u32;
-        let norm_optimiser_u32 = norm_optimiser.ordinal() as u32;
-        let regu_mode_u32 = regularisation.ordinal() as u32;
-        let step_u32 = step as u32;
+        let use_bias_u32 = u32::from(use_bias);
+        let norm_mode_u32 = u32::try_from(norm.ordinal())?;
+        let m_u32 = u32::try_from(train_ctx.batch_size)?;
+        let n_u32 = u32::try_from(n)?;
+        let wr_u32 = u32::try_from(wr)?;
+        let optimiser_u32 = u32::try_from(train_ctx.optimiser.ordinal())?;
+        let norm_optimiser_u32 = u32::try_from(train_ctx.norm_optimiser.ordinal())?;
+        let regu_mode_u32 = u32::try_from(regularisation.ordinal())?;
+        let step_u32 = u32::try_from(step)?;
 
         let extract_optimiser_info = |optimiser: &Optimiser| match optimiser {
             Optimiser::SGD {
                 v_coeff: b1,
                 nesterov,
-            } => (*b1, 0.0, 0.0, if *nesterov { 1 } else { 0 }),
+            } => (*b1, 0.0, 0.0, i32::from(*nesterov)),
             Optimiser::Adam {
                 m_coeff: b1,
                 v_coeff: b2,
@@ -262,14 +267,15 @@ impl GpuContext {
         };
 
         let (linear_beta1, linear_beta2, linear_epsilon, linear_nesterov) =
-            extract_optimiser_info(optimiser);
+            extract_optimiser_info(train_ctx.optimiser);
         let (norm_beta1, norm_beta2, norm_epsilon, norm_nesterov) =
-            extract_optimiser_info(norm_optimiser);
+            extract_optimiser_info(train_ctx.norm_optimiser);
 
         let regu_coeff = match regularisation {
             Regularisation::None => 0.0,
-            Regularisation::L1Regular { regu_coeff } => *regu_coeff,
-            Regularisation::L2Regular { regu_coeff } => *regu_coeff,
+            Regularisation::L1Regular { regu_coeff } | Regularisation::L2Regular { regu_coeff } => {
+                *regu_coeff
+            }
         };
 
         let mut builder = self.stream.launch_builder(match T::precision() {
@@ -281,12 +287,12 @@ impl GpuContext {
             .arg(cur_layer.get_weights().get_data())
             .arg(cur_layer.get_biases().get_data());
 
-        self.master_tensor(
+        Self::master_tensor(
             &mut builder,
             cur_layer.get_master_weights(),
             cur_layer.get_weights(),
         );
-        self.master_tensor(
+        Self::master_tensor(
             &mut builder,
             cur_layer.get_master_biases(),
             cur_layer.get_biases(),
@@ -301,12 +307,12 @@ impl GpuContext {
             .arg(cur_layer.get_norm_weights().get_data())
             .arg(cur_layer.get_norm_biases().get_data());
 
-        self.master_tensor(
+        Self::master_tensor(
             &mut builder,
             cur_layer.get_master_norm_weights(),
             cur_layer.get_norm_weights(),
         );
-        self.master_tensor(
+        Self::master_tensor(
             &mut builder,
             cur_layer.get_master_norm_biases(),
             cur_layer.get_norm_biases(),
@@ -324,8 +330,8 @@ impl GpuContext {
             .arg(&m_u32)
             .arg(&n_u32)
             .arg(&wr_u32)
-            .arg(&lr)
-            .arg(&max_grad_norm)
+            .arg(&train_ctx.learn_rate)
+            .arg(&train_ctx.grad_clamp)
             .arg(&optimiser_u32)
             .arg(&norm_optimiser_u32)
             .arg(&linear_beta1)
@@ -340,7 +346,7 @@ impl GpuContext {
             .arg(&regu_coeff)
             .arg(&step_u32);
 
-        let cfg = self.calculate_cfg2d(n, wr, 0);
+        let cfg = self.calculate_cfg2d(n, wr, 0)?;
 
         unsafe {
             builder.launch(cfg)?;
@@ -356,12 +362,8 @@ impl GpuContext {
         cur_layer: &DenseBlock<T>,
         next_layer: &DenseBlock<T>,
         input: &Tensor2D<T>,
-        optimiser: &Optimiser,
-        norm_optimiser: &Optimiser,
-        batch_size: usize,
-        lr: f32,
-        max_grad_norm: f32,
-        activation: &Activation,
+        activation: Activation,
+        train_ctx: &TrainContext,
         step: usize,
     ) -> Result<(), Error> {
         self.check_tile_dim::<T>()?;
@@ -371,14 +373,14 @@ impl GpuContext {
         let n = cur_layer.get_weights().cols();
         let ec = next_layer.get_outputs().cols();
 
-        let m_u32 = batch_size as u32;
-        let n_u32 = n as u32;
-        let ec_u32 = ec as u32;
-        let norm_mode_u32 = cur_layer.get_normalisation().ordinal() as u32;
-        let act_mode_u32 = activation.ordinal() as u32;
+        let m_u32 = u32::try_from(train_ctx.batch_size)?;
+        let n_u32 = u32::try_from(n)?;
+        let ec_u32 = u32::try_from(ec)?;
+        let norm_mode_u32 = u32::try_from(cur_layer.get_normalisation().ordinal())?;
+        let act_mode_u32 = u32::try_from(activation.ordinal())?;
 
         let leaky_relu_coeff = match activation {
-            Activation::LeakyReLU { coeff } => *coeff,
+            Activation::LeakyReLU { coeff } => coeff,
             _ => 0.0,
         };
 
@@ -389,12 +391,12 @@ impl GpuContext {
 
         err_builder.arg(next_layer.get_delta_prenorm_out().get_data());
 
-        self.master_tensor(
+        Self::master_tensor(
             &mut err_builder,
             next_layer.get_master_weights(),
             next_layer.get_weights(),
         );
-        self.master_tensor(
+        Self::master_tensor(
             &mut err_builder,
             cur_layer.get_master_norm_weights(),
             cur_layer.get_norm_weights(),
@@ -420,12 +422,12 @@ impl GpuContext {
 
         let cfg = self.calculate_cfg2d(
             n,
-            batch_size,
+            train_ctx.batch_size,
             match T::precision() {
                 Precision::FP32 => 0,
-                Precision::FP16 => 2 * self.tile_dim_2 * size_of::<T>() as u32,
+                Precision::FP16 => 2 * self.tile_dim_2 * u32::try_from(size_of::<T>())?,
             },
-        );
+        )?;
 
         unsafe {
             err_builder.launch(cfg)?;
@@ -433,15 +435,6 @@ impl GpuContext {
 
         self.stream.synchronize()?;
 
-        self.gpu_backward_pass(
-            cur_layer,
-            optimiser,
-            norm_optimiser,
-            input,
-            batch_size,
-            lr,
-            max_grad_norm,
-            step,
-        )
+        self.gpu_backward_pass(cur_layer, input, train_ctx, step)
     }
 }

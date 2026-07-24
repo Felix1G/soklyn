@@ -1,12 +1,8 @@
-use std::collections::HashMap;
-use std::fs::File;
-use std::path::Path;
-use indexmap::IndexMap;
-use tempfile::NamedTempFile;
+use crate::LayerInitConfig;
 use crate::ffn::FeedForwardNetwork;
 use crate::getter;
 use crate::io::device::GpuContext;
-use crate::io::safetensor::{SafetensorWriter};
+use crate::io::safetensor::SafetensorWriter;
 use crate::mlp::{DenseBlock, ParamState};
 use crate::util::core::{Matrix, Tensor2D};
 use crate::util::function::Activation::Identity;
@@ -14,16 +10,127 @@ use crate::util::function::Normalisation::Disabled;
 use crate::util::function::Regularisation;
 use crate::util::log::Error;
 use crate::util::r#type::{Precision, PrecisionType};
+use indexmap::IndexMap;
+use std::collections::HashMap;
+use std::fs::File;
+use std::path::Path;
+use tempfile::NamedTempFile;
+
+#[derive(PartialEq)]
+enum ParamType {
+    W,
+    B,
+    MasterW,
+    MasterB,
+    NormW,
+    NormB,
+    MasterNormW,
+    MasterNormB,
+    DvW,
+    DvB,
+    DmW,
+    DmB,
+    DvNormW,
+    DvNormB,
+    DmNormW,
+    DmNormB,
+}
+
+impl ParamType {
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "w" => Some(Self::W),
+            "b" => Some(Self::B),
+            "master_w" => Some(Self::MasterW),
+            "master_b" => Some(Self::MasterB),
+            "norm_w" => Some(Self::NormW),
+            "norm_b" => Some(Self::NormB),
+            "master_norm_w" => Some(Self::MasterNormW),
+            "master_norm_b" => Some(Self::MasterNormB),
+            "dv_w" => Some(Self::DvW),
+            "dv_b" => Some(Self::DvB),
+            "dm_w" => Some(Self::DmW),
+            "dm_b" => Some(Self::DmB),
+            "dv_norm_w" => Some(Self::DvNormW),
+            "dv_norm_b" => Some(Self::DvNormB),
+            "dm_norm_w" => Some(Self::DmNormW),
+            "dm_norm_b" => Some(Self::DmNormB),
+            _ => None,
+        }
+    }
+
+    fn is_f32_only(&self) -> bool {
+        matches!(
+                    self,
+                    Self::MasterW
+                        | Self::MasterB
+                        | Self::MasterNormW
+                        | Self::MasterNormB
+                        | Self::DvW
+                        | Self::DvB
+                        | Self::DmW
+                        | Self::DmB
+                        | Self::DvNormW
+                        | Self::DvNormB
+                        | Self::DmNormW
+                        | Self::DmNormB
+                )
+    }
+
+    fn is_vector(&self) -> bool {
+        matches!(
+                    self,
+                    Self::B
+                        | Self::DvB
+                        | Self::DmB
+                        | Self::NormW
+                        | Self::NormB
+                        | Self::MasterNormW
+                        | Self::MasterNormB
+                        | Self::DvNormW
+                        | Self::DvNormB
+                        | Self::DmNormW
+                        | Self::DmNormB
+                )
+    }
+}
+
+#[derive(Default)]
+struct LayerParams<T: PrecisionType> {
+    w: Option<Matrix<T>>,
+    b: Option<Matrix<T>>,
+    master_w: Option<Matrix<f32>>,
+    master_b: Option<Matrix<f32>>,
+    norm_w: Option<Matrix<T>>,
+    norm_b: Option<Matrix<T>>,
+    master_norm_w: Option<Matrix<f32>>,
+    master_norm_b: Option<Matrix<f32>>,
+    dv_w: Option<Matrix<f32>>,
+    dv_b: Option<Matrix<f32>>,
+    dm_w: Option<Matrix<f32>>,
+    dm_b: Option<Matrix<f32>>,
+    dv_norm_w: Option<Matrix<f32>>,
+    dv_norm_b: Option<Matrix<f32>>,
+    dm_norm_w: Option<Matrix<f32>>,
+    dm_norm_b: Option<Matrix<f32>>,
+}
 
 pub struct SafetensorFile {
-    writer: SafetensorWriter
+    writer: SafetensorWriter,
+}
+
+impl Default for SafetensorFile {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SafetensorFile {
     /// Creates a new empty [`SafeFileTensor`].
+    #[must_use]
     pub fn new() -> Self {
         Self {
-            writer: SafetensorWriter::empty()
+            writer: SafetensorWriter::empty(),
         }
     }
 
@@ -40,10 +147,11 @@ impl SafetensorFile {
     /// * [`Error::SerdeJSON`] - The provided metadata block cannot be parsed or mapped into valid JSON string parameters.
     /// * [`Error::IOError`] - The system fails to create the file at the specified `path`, hits a storage capacity allocation
     ///   threshold, or encounters an issue flushing the stream to disk.
-    pub fn from_ffn<T: PrecisionType>(context: &GpuContext, network: &FeedForwardNetwork<T>) -> Result<Self, Error> {
-        Ok(
-            Self::from_blocks(context, &network.get_layers())?
-        )
+    pub fn from_ffn<T: PrecisionType>(
+        context: &GpuContext,
+        network: &FeedForwardNetwork<T>,
+    ) -> Result<Self, Error> {
+        Self::from_blocks(context, network.get_layers())
     }
 
     /// Creates a new [`SafeFileTensor`] which processes all the blocks in the list of
@@ -52,9 +160,15 @@ impl SafetensorFile {
     /// # Arguments
     /// * `context` - See [`GpuContext`].
     /// * `blocks` - The list of blocks to process.
-    pub fn from_blocks<T: PrecisionType>(context: &GpuContext, blocks: &[DenseBlock<T>]) -> Result<Self, Error> {
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if layers cannot be serialized.
+    pub fn from_blocks<T: PrecisionType>(
+        context: &GpuContext,
+        blocks: &[DenseBlock<T>],
+    ) -> Result<Self, Error> {
         let mut file_writer = Self {
-            writer: SafetensorWriter::empty()
+            writer: SafetensorWriter::empty(),
         };
 
         file_writer.pass_blocks(context, blocks)?;
@@ -67,7 +181,14 @@ impl SafetensorFile {
     /// # Arguments
     /// * `context` - See [`GpuContext`].
     /// * `blocks` - The list of blocks to process.
-    pub fn pass_blocks<T: PrecisionType>(&mut self, context: &GpuContext, blocks: &[DenseBlock<T>]) -> Result<(), Error> {
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if layers cannot be serialised.
+    pub fn pass_blocks<T: PrecisionType>(
+        &mut self,
+        context: &GpuContext,
+        blocks: &[DenseBlock<T>],
+    ) -> Result<(), Error> {
         for (idx, layer) in blocks.iter().enumerate() {
             self.pass_layer(context, layer, idx + 1)?;
         }
@@ -85,7 +206,8 @@ impl SafetensorFile {
         K: AsRef<str>,
         V: ToString,
     {
-        self.writer.pass_metadata(key.as_ref().to_string(), value.to_string());
+        self.writer
+            .pass_metadata(key.as_ref().to_string(), value.to_string());
     }
 
     getter!(pub get_metadata, writer.get_metadata(), IndexMap<String, String>);
@@ -101,40 +223,53 @@ impl SafetensorFile {
     /// This function will return an error if:
     /// * [`Error::SerializationCasting`] - The underlying tensor raw numerical buffers fail memory alignment
     ///   or size validation thresholds while being transmuted into binary safe arrays via `bytemuck`.
+    #[allow(clippy::too_many_lines)]
     pub fn pass_layer<T: PrecisionType>(
         &mut self,
         context: &GpuContext,
         layer: &DenseBlock<T>,
-        layer_num: usize
+        layer_num: usize,
     ) -> Result<(), Error> {
         let weights = layer.get_weights();
         let biases = layer.get_biases();
-        let norm_w = layer.get_norm_weights();
-        let norm_b = layer.get_norm_biases();
-        let w_shape = vec![weights.rows(), weights.cols()];
-        let b_shape = vec![biases.cols()];
-        let nw_shape = vec![norm_w.cols()];
-        let nb_shape = vec![norm_b.cols()];
+        let norm_weights = layer.get_norm_weights();
+        let norm_biases = layer.get_norm_biases();
+
+        let weights_shape = vec![weights.rows(), weights.cols()];
+        let biases_shape = vec![biases.cols()];
+        let norm_weights_shape = vec![norm_weights.cols()];
+        let norm_biases_shape = vec![norm_biases.cols()];
 
         // T-precision tensors
         let t_params: &[(&str, Vec<usize>, Vec<T>)] = &[
-            ("w", w_shape.clone(), weights.download(context)?.v),
-            ("b", b_shape.clone(), biases.download(context)?.v),
-            ("norm_w", nw_shape.clone(), norm_w.download(context)?.v),
-            ("norm_b", nb_shape.clone(), norm_b.download(context)?.v),
+            ("w", weights_shape.clone(), weights.download(context)?.v),
+            ("b", biases_shape.clone(), biases.download(context)?.v),
+            (
+                "norm_w",
+                norm_weights_shape.clone(),
+                norm_weights.download(context)?.v,
+            ),
+            (
+                "norm_b",
+                norm_biases_shape.clone(),
+                norm_biases.download(context)?.v,
+            ),
         ];
         for (suffix, shape, data) in t_params {
             let byte_data = bytemuck::try_cast_slice(data)
-                .map_err(|e| Error::SerializationCasting(
-                    format!("{e:?}"),
-                    "Unable to read tensor binary data")
-                )?.to_vec();
+                .map_err(|e| {
+                    Error::SerializationCasting(
+                        format!("{e:?}"),
+                        "Unable to read tensor binary data",
+                    )
+                })?
+                .to_vec();
 
             self.writer.pass(
                 format!("layer{layer_num}.{suffix}"),
                 shape.clone(),
                 byte_data,
-                T::precision()
+                T::precision(),
             );
         }
 
@@ -143,42 +278,42 @@ impl SafetensorFile {
             let mut f32_params: Vec<(String, Vec<usize>, Vec<f32>)> = vec![
                 (
                     format!("layer{layer_num}.dv_w"),
-                    w_shape.clone(),
+                    weights_shape.clone(),
                     layer.get_dv_weights().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dv_b"),
-                    b_shape.clone(),
+                    biases_shape.clone(),
                     layer.get_dv_biases().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dm_w"),
-                    w_shape.clone(),
+                    weights_shape.clone(),
                     layer.get_dm_weights().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dm_b"),
-                    b_shape.clone(),
+                    biases_shape.clone(),
                     layer.get_dm_biases().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dv_norm_w"),
-                    nw_shape.clone(),
+                    norm_weights_shape.clone(),
                     layer.get_dv_norm_weights().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dv_norm_b"),
-                    nb_shape.clone(),
+                    norm_biases_shape.clone(),
                     layer.get_dv_norm_biases().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dm_norm_w"),
-                    nw_shape.clone(),
+                    norm_weights_shape.clone(),
                     layer.get_dm_norm_weights().download(context)?.v,
                 ),
                 (
                     format!("layer{layer_num}.dm_norm_b"),
-                    nb_shape.clone(),
+                    norm_biases_shape.clone(),
                     layer.get_dm_norm_biases().download(context)?.v,
                 ),
             ];
@@ -205,7 +340,7 @@ impl SafetensorFile {
                     name,
                     shape,
                     bytemuck::cast_slice(&data).to_vec(),
-                    Precision::FP32
+                    Precision::FP32,
                 );
             }
         }
@@ -251,7 +386,7 @@ impl SafetensorFile {
         let mut file = File::open(path)?;
 
         Ok(Self {
-            writer: SafetensorWriter::read(&mut file)?
+            writer: SafetensorWriter::read(&mut file)?,
         })
     }
 
@@ -260,7 +395,7 @@ impl SafetensorFile {
     /// # Arguments
     /// * `context` - See [`GpuContext`]
     /// * `is_training` - If set to false, tensors related only to the backward pass
-    /// will not be generated to save memory.
+    ///   will not be generated to save memory.
     /// * `max_batch_size` - Maximum size of a batch
     ///
     /// # Errors
@@ -276,112 +411,14 @@ impl SafetensorFile {
     ///   (`w`) or biases (`b`) matrices are missing.
     /// * [`Error::DriverError`] - An asynchronous hardware or allocation failure occurs while transferring the reconstructed
     ///   matrices into live GPU memory buffers.
-    /// * Any underlying disk file-reading or foundational SafeTensors parsing fault occurs (`read_safe_tensor`).
+    /// * Any underlying disk file-reading or foundational [`SafeTensors`] parsing fault occurs (`read_safe_tensor`).
+    #[allow(clippy::too_many_lines)]
     pub fn into_blocks<T: PrecisionType + Default>(
         self,
         context: &GpuContext,
         is_training: bool,
         max_batch_size: usize,
     ) -> Result<Vec<DenseBlock<T>>, Error> {
-        #[derive(PartialEq)]
-        enum ParamType {
-            W,
-            B,
-            MasterW,
-            MasterB,
-            NormW,
-            NormB,
-            MasterNormW,
-            MasterNormB,
-            DvW,
-            DvB,
-            DmW,
-            DmB,
-            DvNormW,
-            DvNormB,
-            DmNormW,
-            DmNormB,
-        }
-
-        impl ParamType {
-            fn from_str(s: &str) -> Option<Self> {
-                match s {
-                    "w" => Some(Self::W),
-                    "b" => Some(Self::B),
-                    "master_w" => Some(Self::MasterW),
-                    "master_b" => Some(Self::MasterB),
-                    "norm_w" => Some(Self::NormW),
-                    "norm_b" => Some(Self::NormB),
-                    "master_norm_w" => Some(Self::MasterNormW),
-                    "master_norm_b" => Some(Self::MasterNormB),
-                    "dv_w" => Some(Self::DvW),
-                    "dv_b" => Some(Self::DvB),
-                    "dm_w" => Some(Self::DmW),
-                    "dm_b" => Some(Self::DmB),
-                    "dv_norm_w" => Some(Self::DvNormW),
-                    "dv_norm_b" => Some(Self::DvNormB),
-                    "dm_norm_w" => Some(Self::DmNormW),
-                    "dm_norm_b" => Some(Self::DmNormB),
-                    _ => None,
-                }
-            }
-
-            fn is_f32_only(&self) -> bool {
-                matches!(
-                self,
-                Self::MasterW
-                    | Self::MasterB
-                    | Self::MasterNormW
-                    | Self::MasterNormB
-                    | Self::DvW
-                    | Self::DvB
-                    | Self::DmW
-                    | Self::DmB
-                    | Self::DvNormW
-                    | Self::DvNormB
-                    | Self::DmNormW
-                    | Self::DmNormB
-            )
-            }
-
-            fn is_vector(&self) -> bool {
-                matches!(
-                self,
-                Self::B
-                    | Self::DvB
-                    | Self::DmB
-                    | Self::NormW
-                    | Self::NormB
-                    | Self::MasterNormW
-                    | Self::MasterNormB
-                    | Self::DvNormW
-                    | Self::DvNormB
-                    | Self::DmNormW
-                    | Self::DmNormB
-            )
-            }
-        }
-
-        #[derive(Default)]
-        struct LayerParams<T: PrecisionType> {
-            w: Option<Matrix<T>>,
-            b: Option<Matrix<T>>,
-            master_w: Option<Matrix<f32>>,
-            master_b: Option<Matrix<f32>>,
-            norm_w: Option<Matrix<T>>,
-            norm_b: Option<Matrix<T>>,
-            master_norm_w: Option<Matrix<f32>>,
-            master_norm_b: Option<Matrix<f32>>,
-            dv_w: Option<Matrix<f32>>,
-            dv_b: Option<Matrix<f32>>,
-            dm_w: Option<Matrix<f32>>,
-            dm_b: Option<Matrix<f32>>,
-            dv_norm_w: Option<Matrix<f32>>,
-            dv_norm_b: Option<Matrix<f32>>,
-            dm_norm_w: Option<Matrix<f32>>,
-            dm_norm_b: Option<Matrix<f32>>,
-        }
-
         let mut layers_map: HashMap<usize, LayerParams<T>> = HashMap::new();
         let mut max_layer = 0usize;
 
@@ -394,22 +431,24 @@ impl SafetensorFile {
                 continue;
             };
 
-            let (layer_str, param_str) = rest.split_once('.')
-                .ok_or_else(|| Error::InvalidTensorName {
-                    name: name.clone(),
-                    reason: "missing '.' separator"
-                })?;
+            let (layer_str, param_str) =
+                rest.split_once('.')
+                    .ok_or_else(|| Error::InvalidTensorName {
+                        name: name.clone(),
+                        reason: "missing '.' separator",
+                    })?;
 
-            let layer_idx = layer_str.parse::<usize>()
+            let layer_idx = layer_str
+                .parse::<usize>()
                 .map_err(|_| Error::InvalidTensorName {
                     name: name.clone(),
-                    reason: "invalid layer index number"
+                    reason: "invalid layer index number",
                 })?;
 
-            let param_type = ParamType::from_str(param_str)
-                .ok_or_else(|| Error::InvalidTensorName {
+            let param_type =
+                ParamType::from_str(param_str).ok_or_else(|| Error::InvalidTensorName {
                     name: name.clone(),
-                    reason: "unrecognized parameter type"
+                    reason: "unrecognized parameter type",
                 })?;
 
             // F32-only params must not be stored as F16
@@ -471,16 +510,18 @@ impl SafetensorFile {
         }
 
         // Helper closures
-        let from_t = |opt: &Option<Matrix<T>>, rows, cols| 
+        let from_t = |opt: &Option<Matrix<T>>, rows, cols| {
             Ok(match opt {
                 Some(m) => Tensor2D::<T>::from_cpu_vector(context, &m.v, &[rows, cols])?,
                 None => Tensor2D::<T>::zeros(context, &[rows, cols])?,
-            }) as Result<Tensor2D<T>, Error>;
+            }) as Result<Tensor2D<T>, Error>
+        };
 
-        let from_f32_opt = |opt: &Option<Matrix<f32>>, rows, cols|
-            opt.as_ref().map(|m| 
-                Tensor2D::<f32>::from_cpu_vector(context, &m.v, &[rows, cols])
-            ).transpose();
+        let from_f32_opt = |opt: &Option<Matrix<f32>>, rows, cols| {
+            opt.as_ref()
+                .map(|m| Tensor2D::<f32>::from_cpu_vector(context, &m.v, &[rows, cols]))
+                .transpose()
+        };
 
         (1..=max_layer)
             .map(|idx| {
@@ -502,31 +543,33 @@ impl SafetensorFile {
                 DenseBlock::<T>::from_tensors(
                     context,
                     is_training,
-                    ParamState::from_tensors(
-                        Tensor2D::<T>::from_cpu_vector(context, &w.v, &[wr, wc])?,
-                        Tensor2D::<T>::from_cpu_vector(context, &b.v, &[br, bc])?,
-                        from_f32_opt(&layer.master_w, wr, wc)?,
-                        from_f32_opt(&layer.master_b, br, bc)?,
-                        from_f32_opt(&layer.dv_w, wr, wc)?,
-                        from_f32_opt(&layer.dv_b, br, bc)?,
-                        from_f32_opt(&layer.dm_w, wr, wc)?,
-                        from_f32_opt(&layer.dm_b, br, bc)?,
-                    ),
-                    ParamState::from_tensors(
-                        from_t(&layer.norm_w, br, wc)?,
-                        from_t(&layer.norm_b, br, bc)?,
-                        from_f32_opt(&layer.master_norm_w, br, wc)?,
-                        from_f32_opt(&layer.master_norm_b, br, bc)?,
-                        from_f32_opt(&layer.dv_norm_w, br, wc)?,
-                        from_f32_opt(&layer.dv_norm_b, br, bc)?,
-                        from_f32_opt(&layer.dm_norm_w, br, wc)?,
-                        from_f32_opt(&layer.dm_norm_b, br, bc)?,
-                    ),
-                    Disabled,
-                    Identity,
-                    Regularisation::None,
+                    ParamState {
+                        w: Tensor2D::<T>::from_cpu_vector(context, &w.v, &[wr, wc])?,
+                        b: Tensor2D::<T>::from_cpu_vector(context, &b.v, &[br, bc])?,
+                        master_w: from_f32_opt(&layer.master_w, wr, wc)?,
+                        master_b: from_f32_opt(&layer.master_b, br, bc)?,
+                        dv_w: from_f32_opt(&layer.dv_w, wr, wc)?,
+                        dv_b: from_f32_opt(&layer.dv_b, br, bc)?,
+                        dm_w: from_f32_opt(&layer.dm_w, wr, wc)?,
+                        dm_b: from_f32_opt(&layer.dm_b, br, bc)?,
+                    },
+                    ParamState {
+                        w: from_t(&layer.norm_w, br, wc)?,
+                        b: from_t(&layer.norm_b, br, bc)?,
+                        master_w: from_f32_opt(&layer.master_norm_w, br, wc)?,
+                        master_b: from_f32_opt(&layer.master_norm_b, br, bc)?,
+                        dv_w: from_f32_opt(&layer.dv_norm_w, br, wc)?,
+                        dv_b: from_f32_opt(&layer.dv_norm_b, br, bc)?,
+                        dm_w: from_f32_opt(&layer.dm_norm_w, br, wc)?,
+                        dm_b: from_f32_opt(&layer.dm_norm_b, br, bc)?,
+                    },
                     max_batch_size,
-                    0.0,
+                    &LayerInitConfig {
+                        normalisation: Disabled,
+                        activation: Identity,
+                        regularisation: Regularisation::None,
+                        mask_coeff: 0.0,
+                    },
                 )
             })
             .collect::<Result<Vec<DenseBlock<T>>, Error>>()

@@ -1,7 +1,7 @@
-use cudarc::driver::{CudaSlice, LaunchConfig, PushKernelArg};
 use crate::io::device::GpuContext;
 use crate::log::Error;
 use crate::{Precision, PrecisionType};
+use cudarc::driver::{CudaSlice, LaunchConfig, PushKernelArg};
 
 impl GpuContext {
     pub(crate) fn gpu_cast_t<T: PrecisionType, U: PrecisionType>(
@@ -17,7 +17,7 @@ impl GpuContext {
             });
         }
 
-        let len = src.len() as u32;
+        let len = u32::try_from(src.len())?;
 
         let mut builder;
         if T::precision() == Precision::FP32 && U::precision() == Precision::FP16 {
@@ -52,7 +52,7 @@ impl GpuContext {
         v: T,
     ) -> Result<(), Error> {
         let len = dst.len();
-        let len_u32 = len as u32;
+        let len_u32 = u32::try_from(len)?;
 
         let mut builder = self.stream.launch_builder(match T::precision() {
             Precision::FP32 => &self.broadcast_func.0,
@@ -62,7 +62,7 @@ impl GpuContext {
 
         let cfg = LaunchConfig {
             grid_dim: (
-                (len as u32 + self.tile_dim_2_minus_1) / self.tile_dim_2,
+                (u32::try_from(len)? + self.tile_dim_2_minus_1) / self.tile_dim_2,
                 1,
                 1,
             ),
@@ -86,7 +86,7 @@ impl GpuContext {
         b_dev: &CudaSlice<T>,
         p: usize,
         c_dev: &mut CudaSlice<T>,
-    ) {
+    ) -> Result<(), Error> {
         let mut builder = self.stream.launch_builder(match T::precision() {
             Precision::FP32 => &self.gemm_func.0,
             Precision::FP16 => &self.gemm_func.1,
@@ -95,15 +95,16 @@ impl GpuContext {
         builder.arg(&m).arg(&n).arg(&p);
         builder.arg(&self.tile_dim);
 
-        let cfg = self.calculate_cfg2d(p, m, 2 * self.tile_dim_2 * size_of::<T>() as u32);
+        let cfg =
+            self.calculate_cfg2d(p, m, 2 * self.tile_dim_2 * u32::try_from(size_of::<T>())?)?;
 
         unsafe {
-            builder
-                .launch(cfg)
-                .expect("matrix multiplication launch failed.");
+            builder.launch(cfg)?;
         }
 
-        self.stream.synchronize().unwrap();
+        self.stream.synchronize()?;
+
+        Ok(())
     }
 
     pub(crate) fn gpu_matrix_add<T: PrecisionType>(
@@ -113,7 +114,7 @@ impl GpuContext {
         n: usize,
         b_dev: &CudaSlice<T>,
         c_dev: &mut CudaSlice<T>,
-    ) {
+    ) -> Result<(), Error> {
         let mut builder = self.stream.launch_builder(match T::precision() {
             Precision::FP32 => &self.geam_func.0,
             Precision::FP16 => &self.geam_func.1,
@@ -121,12 +122,14 @@ impl GpuContext {
         builder.arg(a_dev).arg(b_dev).arg(c_dev);
         builder.arg(&m).arg(&n);
 
-        let cfg = self.calculate_cfg2d(n, m, 0);
+        let cfg = self.calculate_cfg2d(n, m, 0)?;
 
         unsafe {
-            builder.launch(cfg).expect("matrix addition launch failed.");
+            builder.launch(cfg)?;
         }
 
-        self.stream.synchronize().unwrap();
+        self.stream.synchronize()?;
+
+        Ok(())
     }
 }

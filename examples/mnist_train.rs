@@ -14,6 +14,7 @@ use soklyn::util::log::{init_log, Error};
 use soklyn::util::scheduler::{ReduceLROnPlateauScheduler, SchedulerMode};
 use std::process::exit;
 use std::time::SystemTime;
+use soklyn::context::{LossConfig, MultiLayerTrainContext};
 use soklyn::io::save::SafetensorFile;
 
 const BATCH_SIZE: usize = 200;
@@ -79,9 +80,9 @@ fn run_pipeline() -> Result<(), Error> {
 
     // --- DEAD CODE RETAINED FOR TESTS ---
     let layers: Vec<DenseBlock<f32>> = vec![
-        DenseBlock::default(&context, true, 784, 2048, BATCH_SIZE, &mut rand)?,
-        DenseBlock::default(&context, true, 2048, 2048, BATCH_SIZE, &mut rand)?,
-        DenseBlock::default(&context, true, 2048, 10, BATCH_SIZE, &mut rand)?
+        DenseBlock::new(&context, true, 784, 2048, BATCH_SIZE, &mut rand)?,
+        DenseBlock::new(&context, true, 2048, 2048, BATCH_SIZE, &mut rand)?,
+        DenseBlock::new(&context, true, 2048, 10, BATCH_SIZE, &mut rand)?
     ];
     
     let writer = SafetensorFile::read("assets/data/mnist7AEC.safetensors")?;
@@ -89,7 +90,7 @@ fn run_pipeline() -> Result<(), Error> {
     while layers.len() > 2 {
         layers.pop();
     }
-    layers.push(DenseBlock::default(&context, true, 256, 10, BATCH_SIZE, &mut rand)?);
+    layers.push(DenseBlock::new(&context, true, 256, 10, BATCH_SIZE, &mut rand)?);
 
     configure_layers_auto_encoder(&mut layers);
 
@@ -107,7 +108,7 @@ fn run_pipeline() -> Result<(), Error> {
     Ok(())
 }
 
-fn configure_layers(layers: &mut Vec<DenseBlock<f32>>) {
+fn configure_layers(layers: &mut [DenseBlock<f32>]) {
     layers[0].set_normalisation(LayerNorm);
     layers[0].set_activation(LeakyReLU { coeff: 0.01 });
     layers[0].set_regularisation(L2Regular { regu_coeff: REGU_COEFF });
@@ -124,7 +125,7 @@ fn configure_layers(layers: &mut Vec<DenseBlock<f32>>) {
     layers[2].set_mask_coeff(0.0);
 }
 
-fn configure_layers_auto_encoder(layers: &mut Vec<DenseBlock<f32>>) {
+fn configure_layers_auto_encoder(layers: &mut [DenseBlock<f32>]) {
     layers[0].set_normalisation(BatchNorm);
     layers[0].set_activation(Mish);
 
@@ -148,8 +149,8 @@ fn epoch(
     println!("--- Testing success rate: {test_success}% ---");
     println!("--- Epoch #{epoch} complete ---");
 
-    if epoch % 10 == 0 {
-        let mut writer = SafetensorFile::from_ffn(&context, &network)?;
+    if epoch.is_multiple_of(10) {
+        let mut writer = SafetensorFile::from_ffn(context, network)?;
         writer.pass_metadata(&"epoch", &epoch);
         writer.save(format!("assets/data/mnist{}.safetensors", epoch / 10))?;
     }
@@ -181,8 +182,16 @@ fn train(
         forw_ms += t0.elapsed().map_err(|_| Error::InvalidConfiguration { reason: "Clock rollback anomaly".to_string() })?.as_secs_f64() * 1000.0;
 
         let t1 = SystemTime::now();
-        network.backward(context, &outs, &target_tensor, &input, LossFunc::CrossEntropyLoss, Activation::Softmax, BATCH_SIZE,
-                         &[adam, adam, adam], &[adam, adam, adam], lr, CLAMP, step)?;
+        network.backward(context, &outs, &target_tensor, &input, &LossConfig {
+            loss_func: LossFunc::BinaryCrossEntropy,
+            activation: Activation::Sigmoid
+        }, &MultiLayerTrainContext {
+            batch_size: BATCH_SIZE,
+            optimisers: &[adam, adam, adam],
+            norm_optimisers: &[adam, adam, adam],
+            learn_rate: lr,
+            grad_clamp: CLAMP
+        }, step)?;
         loss_ms += t1.elapsed().map_err(|_| Error::InvalidConfiguration { reason: "Clock rollback anomaly".to_string() })?.as_secs_f64() * 1000.0;
 
         let out_vec = outs[2].download(context)?.v;

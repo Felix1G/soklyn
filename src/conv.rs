@@ -1,17 +1,14 @@
-use crate::core::{Tensor1D, Tensor2D, Tensor4D};
+use crate::core::{Tensor1D, Tensor4D};
 use crate::io::device::GpuContext;
 use crate::log::Error;
 use crate::r#type::{generate_twiddle_lut, CastPrecision};
-use crate::Activation::Identity;
 use crate::ConvAlgorithm::FrequencyFFT;
 use crate::Normalisation::Disabled;
 use crate::PoolingType::{MaxPooling, NoPooling};
-use crate::{
-    getter, getter_copy, getter_option, setter, Activation, Complex32, ConvAlgorithm,
-    InitFunc, KernelConfig, LossFunc, Normalisation, PoolingType, PrecisionType, Regularisation,
-};
+use crate::{getter, getter_copy, getter_option, setter, Activation, Complex32, ConvAlgorithm, InitFunc, KernelConfig, LayerInitConfig, LossFunc, Normalisation, PoolingType, PrecisionType, Regularisation};
 use cudarc::driver::CudaSlice;
 use half::f16;
+use std::default::Default;
 use ConvAlgorithm::Spatial;
 
 pub(crate) struct ConvForwardCache<T: PrecisionType> {
@@ -161,7 +158,11 @@ impl<T: PrecisionType> ConvBlock<T> {
     /// * `in_channels` - Number of input feature channels.
     /// * `out_channels` - Number of output feature channels.
     /// * `normalisation` - See [`Normalisation`]. Pass [`Disabled`] to disable normalisation.
-    pub fn default<I: InitFunc>(
+    /// 
+    /// # Errors
+    /// Returns an [`Error`] if the dimensions or configuration is invalid.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new<I: InitFunc>(
         context: &GpuContext,
         is_training: bool,
         max_batch_size: usize,
@@ -173,7 +174,7 @@ impl<T: PrecisionType> ConvBlock<T> {
         out_channels: usize,
         normalisation: Normalisation,
     ) -> Result<Self, Error> {
-        Self::new(
+        Self::new_with_config(
             context,
             Spatial,
             is_training,
@@ -185,10 +186,10 @@ impl<T: PrecisionType> ConvBlock<T> {
             MaxPooling,
             in_channels,
             out_channels,
-            Identity,
-            normalisation,
-            Regularisation::None,
-            0.0,
+            &LayerInitConfig {
+                normalisation,
+                ..Default::default()
+            },
         )
     }
 
@@ -206,11 +207,13 @@ impl<T: PrecisionType> ConvBlock<T> {
     /// * `in_channels` - Number of input feature channels.
     /// * `out_channels` - Number of output feature channels.
     /// * `padding` - Border pixel extension count for input boundary handling.
-    /// * `activation` - See [`Activation`]. Pass [`Identity`] to set this layer to an output layer.
-    /// * `normalisation` - See [`Normalisation`]. Pass [`Disabled`] to disable normalisation.
-    /// * `regularisation` - See [`Regularisation`]. Pass [`Regularisation::None`] to disable regularisation.
-    /// * `mask_coeff` - Mask coefficient for dropout.
-    pub fn new<I: InitFunc>(
+    /// * `init_config` - See [`LayerInitConfig`].
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if the dimensions or configuration is invalid.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
+    pub fn new_with_config<I: InitFunc>(
         context: &GpuContext,
         algorithm: ConvAlgorithm,
         is_training: bool,
@@ -222,10 +225,7 @@ impl<T: PrecisionType> ConvBlock<T> {
         pooling_type: PoolingType,
         in_channels: usize,
         out_channels: usize,
-        activation: Activation,
-        normalisation: Normalisation,
-        regularisation: Regularisation,
-        mask_coeff: f32,
+        init_config: &LayerInitConfig,
     ) -> Result<Self, Error> {
         if max_input_dim.0 == 0 || max_input_dim.1 == 0 {
             return Err(Error::InvalidConfiguration {
@@ -253,7 +253,7 @@ impl<T: PrecisionType> ConvBlock<T> {
             out_channels * fan_in,
         );
 
-        let filter_out_dim = filter_cfg.elements_from_length(&max_input_dim);
+        let filter_out_dim = filter_cfg.elements_from_length(max_input_dim);
         if filter_out_dim.0 == 0 || filter_out_dim.1 == 0 {
             return Err(Error::InvalidConfiguration {
                 reason: String::from(
@@ -273,7 +273,7 @@ impl<T: PrecisionType> ConvBlock<T> {
                 });
             }
         } else {
-            pooling_out_dim = filter_out_dim.clone();
+            pooling_out_dim = filter_out_dim;
         }
 
         let filter_out_shape = [
@@ -283,7 +283,7 @@ impl<T: PrecisionType> ConvBlock<T> {
             filter_out_dim.0,
         ];
 
-        let full_input_size = filter_cfg.padded_length(&max_input_dim);
+        let full_input_size = filter_cfg.padded_length(max_input_dim);
         let fft_output_size = (
             full_input_size.0.next_power_of_two(),
             full_input_size.1.next_power_of_two(),
@@ -308,7 +308,7 @@ impl<T: PrecisionType> ConvBlock<T> {
             }
         }
 
-        Self::from_tensors(
+        Ok(Self::from_tensors(
             is_training,
             algorithm,
             ConvForwardCache::new(
@@ -332,21 +332,21 @@ impl<T: PrecisionType> ConvBlock<T> {
             pooling_cfg,
             pooling_type,
             Tensor4D::zeros(context, &filter_out_shape)?,
-            if normalisation == Disabled {
+            if init_config.normalisation == Disabled {
                 None
             } else {
                 Some(ConvNormCache::new(
                     context,
-                    normalisation,
+                    init_config.normalisation,
                     &filter_out_shape,
                 )?)
             },
             max_batch_size,
-            max_input_dim.clone(),
-            activation,
-            normalisation,
-            regularisation,
-            mask_coeff,
+            *max_input_dim,
+            init_config.activation,
+            init_config.normalisation,
+            init_config.regularisation,
+            init_config.mask_coeff,
             if algorithm == FrequencyFFT {
                 Some(context.get_stream().alloc_zeros::<Complex32>(
                     max_batch_size * in_channels * fft_output_spatial_size,
@@ -368,9 +368,10 @@ impl<T: PrecisionType> ConvBlock<T> {
             } else {
                 None
             },
-        )
+        ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_tensors(
         is_training: bool,
         algorithm: ConvAlgorithm,
@@ -391,8 +392,8 @@ impl<T: PrecisionType> ConvBlock<T> {
         fft_input: Option<CudaSlice<Complex32>>,
         fft_weights: Option<CudaSlice<Complex32>>,
         fft_output: Option<CudaSlice<Complex32>>,
-    ) -> Result<Self, Error> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             algorithm,
             forward_cache,
             filter_weights,
@@ -415,7 +416,7 @@ impl<T: PrecisionType> ConvBlock<T> {
             twiddle_lut_w: None,
             twiddle_lut_h: None,
             twiddle_last_size: (0, 0),
-        })
+        }
     }
 
     // Getting 4D tensors
@@ -427,9 +428,6 @@ impl<T: PrecisionType> ConvBlock<T> {
     getter!(pub get_features, forward_cache.features, Tensor4D<T>);
     getter_option!(pub(crate) get_norm_cache, norm_cache, Option<ConvNormCache<T>>);
     getter!(pub get_mask, mask, Tensor4D<T>);
-    pub fn get_prenorm_features(&self) -> &Tensor4D<T> {
-        &self.norm_cache.as_ref().unwrap().prenorm_features
-    }
 
     // Getting configurations
     getter!(pub get_algorithm, algorithm, ConvAlgorithm);
@@ -453,6 +451,7 @@ impl<T: PrecisionType> ConvBlock<T> {
     getter_option!(pub get_twiddle_lut_height, twiddle_lut_h, Option<CudaSlice<Complex32>>);
 
     /// Note: if no pooling configuration was specified, this function will always return [`NoPooling`].
+    #[must_use]
     pub fn get_pooling_type(&self) -> PoolingType {
         if self.pooling_cfg.is_enabled() {
             self.pooling_type
@@ -554,11 +553,11 @@ impl<T: PrecisionType> ConvBlock<T> {
     /// # Arguments
     /// * `context` - GPU Context. See [`GpuContext`].
     /// * `input` - A [`Tensor4D<T>`] with size `(batch size, input features, input width, input height)` representing
-    /// the current input batch.
+    ///   the current input batch.
     /// * `batch_size` - Batch size of `input`. If the input rows exceed `batch_size`, only the
-    /// first `batch_size` rows will be considered.
+    ///   first `batch_size` rows will be considered.
     /// * `use_dropout` - Whether the forward pass is part of the training loop. If set to `false`,
-    /// the dropout feature will be bypassed.
+    ///   the dropout feature will be bypassed.
     /// * `step` - The current training iteration step.
     ///
     /// # Returns
@@ -648,18 +647,19 @@ impl<T: PrecisionType> ConvBlock<T> {
         // regenerate twiddle look up table
         if self.twiddle_last_size != fft_output_size {
             if self.algorithm == FrequencyFFT {
-                let twiddle_lut_w_vec = generate_twiddle_lut(fft_output_size.0);
-                let twiddle_lut_h_vec = generate_twiddle_lut(fft_output_size.1);
+                let twiddle_lut_width_vec = generate_twiddle_lut(fft_output_size.0);
+                let twiddle_lut_height_vec = generate_twiddle_lut(fft_output_size.1);
 
-                self.twiddle_lut_w = Some(context.get_stream().clone_htod(&twiddle_lut_w_vec)?);
-                self.twiddle_lut_h = Some(context.get_stream().clone_htod(&twiddle_lut_h_vec)?);
+                self.twiddle_lut_w = Some(context.get_stream().clone_htod(&twiddle_lut_width_vec)?);
+                self.twiddle_lut_h =
+                    Some(context.get_stream().clone_htod(&twiddle_lut_height_vec)?);
             }
 
             self.twiddle_last_size = fft_output_size;
         }
 
         context.gpu_conv_forward_pass(
-            &self,
+            self,
             input,
             &fft_output_size,
             batch_size,
@@ -678,7 +678,7 @@ impl<T: PrecisionType> ConvBlock<T> {
     /// # Arguments
     /// * `context` - GPU Context. See [`GpuContext`].
     /// * `target` - A [`Tensor4D<T>`] with size `(batch size, output features)` representing
-    /// the current target batch.
+    ///   the current target batch.
     /// * `err_mode` - See [`LossFunc`] for the available error functions.
     /// * `act_mode` - See [`Activation`] for the available activation functions.
     ///
@@ -801,12 +801,30 @@ impl<T: PrecisionType> ConvBlock<T> {
 }
 
 impl ConvBlock<f32> {
+    /// Converts the [`ConvBlock`] weights, feature maps, and states to half-precision
+    /// floating-point ([`f16`]).
+    ///
+    /// # Arguments
+    /// * `context` - See [`GpuContext`].
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if CUDA memory allocation fails on the GPU or if an
+    /// underlying kernel fails while casting internal tensors.
     pub fn convert_f16(self, context: &GpuContext) -> Result<ConvBlock<f16>, Error> {
         self.cast::<f16>(context)
     }
 }
 
 impl ConvBlock<f16> {
+    /// Converts the [`ConvBlock`] weights, feature maps, and states to single-precision
+    /// floating-point ([`f32`]).
+    ///
+    /// # Arguments
+    /// * `context` - See [`GpuContext`].
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if CUDA memory allocation fails on the GPU or if an
+    /// underlying kernel fails while casting internal tensors.
     pub fn convert_f32(self, context: &GpuContext) -> Result<ConvBlock<f32>, Error> {
         self.cast::<f32>(context)
     }

@@ -1,7 +1,7 @@
 use crate::io::device::GpuContext;
 use crate::util::log::Error;
 use crate::util::r#type::PrecisionType;
-use crate::{ComplexType, TensorContainerType};
+use crate::TensorContainerType;
 use cudarc::driver::CudaSlice;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -88,8 +88,8 @@ fn generate_unique_tensor_id() -> usize {
 }
 
 pub(crate) fn scramble_seed(step: u32, layer_id: u32) -> u32 {
-    let mut hash = step.wrapping_mul(1103515245).wrapping_add(layer_id);
-    hash = (hash ^ (hash >> 16)).wrapping_mul(1103515245);
+    let mut hash = step.wrapping_mul(1_103_515_245).wrapping_add(layer_id);
+    hash = (hash ^ (hash >> 16)).wrapping_mul(1_103_515_245);
     hash ^ (hash >> 15)
 }
 
@@ -98,23 +98,27 @@ pub(crate) fn scramble_seed(step: u32, layer_id: u32) -> u32 {
 pub struct Matrix<T: PrecisionType> {
     rows: usize,
     cols: usize,
-    pub v: Vec<T> //values
+    pub v: Vec<T>, //values
 }
 
 impl<T: PrecisionType> Matrix<T> {
     /// Creates a new empty [`Matrix`] with dimensions set to `(0, 0)`.
-    pub fn empty() -> Self { Self::new(0, 0) }
+    #[must_use]
+    pub fn empty() -> Self {
+        Self::new(0, 0)
+    }
 
     /// Creates a new zero-initialised [`Matrix`] with the given dimensions.
     ///
     /// # Arguments
     /// * `rows` - Number of rows.
     /// * `cols` - Number of columns.
+    #[must_use]
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
             rows,
             cols,
-            v: vec![T::zero(); rows * cols]
+            v: vec![T::zero(); rows * cols],
         }
     }
 
@@ -142,6 +146,7 @@ impl<T: PrecisionType> Matrix<T> {
     /// Safely fetches an immutable reference to the element at `(row, col)`.
     ///
     /// Returns `None` if any coordinates are out of bounds.
+    #[must_use]
     pub fn get(&self, row: usize, col: usize) -> Option<&T> {
         if row < self.rows && col < self.cols {
             self.v.get(row * self.cols + col)
@@ -174,7 +179,7 @@ impl<T: PrecisionType> Matrix<T> {
             return Err(Error::IndexOutOfBounds {
                 idx,
                 max_idx,
-                reason: "setting element in matrix"
+                reason: "setting element in matrix",
             });
         }
 
@@ -195,7 +200,7 @@ impl<T: PrecisionType> Matrix<T> {
             return Err(Error::IndexOutOfBounds {
                 idx,
                 max_idx,
-                reason: "setting element in matrix"
+                reason: "setting element in matrix",
             });
         }
 
@@ -209,10 +214,16 @@ impl<T: PrecisionType> Matrix<T> {
     getter!(pub get_v, v, Vec<T>);
 
     /// Returns `true` if the container holds zero elements.
-    pub fn is_empty(&self) -> bool { self.v.len() == 0 }
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.v.len() == 0
+    }
 
     /// Returns `true` if the container holds one or more elements.
-    pub fn is_not_empty(&self) -> bool { self.v.len() != 0 }
+    #[must_use]
+    pub fn is_not_empty(&self) -> bool {
+        !self.v.is_empty()
+    }
 }
 
 /// A 4D data container representing a collection (batch) of multichannel 2D signals,
@@ -229,18 +240,19 @@ pub struct ImageBatch<T: PrecisionType> {
     c: usize,
     h: usize,
     w: usize,
-    v: Vec<T> //values
+    v: Vec<T>, //values
 }
 
 impl<T: PrecisionType> ImageBatch<T> {
     /// Creates a new empty [`ImageBatch`] with dimensions set to `(0, 0, 0, 0)`.
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             n: 0,
             c: 0,
             h: 0,
             w: 0,
-            v: Vec::new()
+            v: Vec::new(),
         }
     }
 
@@ -251,8 +263,15 @@ impl<T: PrecisionType> ImageBatch<T> {
     /// * `c` - the number of channels.
     /// * `h` - the height of the image.
     /// * `w` - the width of the image.
+    #[must_use]
     pub fn new(n: usize, c: usize, h: usize, w: usize) -> Self {
-        Self { n, c, h, w, v: vec![T::zero(); n * c * h * w ] }
+        Self {
+            n,
+            c,
+            h,
+            w,
+            v: vec![T::zero(); n * c * h * w],
+        }
     }
 
     /// Creates a new [`ImageBatch`] where each element is initialised via a closure.
@@ -261,6 +280,7 @@ impl<T: PrecisionType> ImageBatch<T> {
     ///
     /// # Arguments
     /// * `init` - A closure mapping `(n, c, h, w)` to an initial value `T`.
+    #[allow(clippy::many_single_char_names)]
     pub fn new_init<F>(n: usize, c: usize, h: usize, w: usize, mut init: F) -> Self
     where
         F: FnMut(usize, usize, usize, usize) -> T,
@@ -283,6 +303,7 @@ impl<T: PrecisionType> ImageBatch<T> {
 
     /// Computes the flat 1D index corresponding to the given 4D coordinates.
     #[inline]
+    #[must_use]
     pub fn idx(&self, n: usize, c: usize, h: usize, w: usize) -> usize {
         n * (self.c * self.h * self.w) + c * (self.h * self.w) + h * self.w + w
     }
@@ -290,6 +311,7 @@ impl<T: PrecisionType> ImageBatch<T> {
     /// Safely fetches an immutable reference to the element at index `idx`.
     ///
     /// Returns `None` if any coordinates are out of bounds.
+    #[must_use]
     pub fn get_v(&self, idx: usize) -> Option<&T> {
         if idx <= self.v.len() {
             self.v.get(idx)
@@ -301,6 +323,7 @@ impl<T: PrecisionType> ImageBatch<T> {
     /// Safely fetches an immutable reference to the element at `(n, c, h, w)`.
     ///
     /// Returns `None` if any coordinates are out of bounds.
+    #[must_use]
     pub fn get(&self, n: usize, c: usize, h: usize, w: usize) -> Option<&T> {
         if n < self.n && c < self.c && h < self.h && w < self.w {
             self.v.get(self.idx(n, c, h, w))
@@ -333,7 +356,7 @@ impl<T: PrecisionType> ImageBatch<T> {
             return Err(Error::IndexOutOfBounds {
                 idx,
                 max_idx,
-                reason: "reading element from image batch"
+                reason: "reading element from image batch",
             });
         }
 
@@ -354,7 +377,7 @@ impl<T: PrecisionType> ImageBatch<T> {
             return Err(Error::IndexOutOfBounds {
                 idx,
                 max_idx,
-                reason: "setting element in image batch"
+                reason: "setting element in image batch",
             });
         }
 
@@ -370,10 +393,16 @@ impl<T: PrecisionType> ImageBatch<T> {
     getter!(pub get_data, v, Vec<T>);
 
     /// Returns `true` if the container holds zero elements.
-    pub fn is_empty(&self) -> bool { self.v.len() == 0 }
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.v.len() == 0
+    }
 
     /// Returns `true` if the container holds one or more elements.
-    pub fn is_not_empty(&self) -> bool { self.v.len() != 0 }
+    #[must_use]
+    pub fn is_not_empty(&self) -> bool {
+        !self.v.is_empty()
+    }
 }
 
 /// The multidimensional data container which generalises scalars, vectors, and matrices to
@@ -404,28 +433,37 @@ pub type Tensor4D<T> = Tensor<T, ImageBatch<T>>;
 
 impl<T: PrecisionType> Tensor1D<T> {
     #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.shape[0]
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Fetches `data` from the live GPU memory buffers.
     ///
     /// # Arguments
     /// * `context` - See [`GpuContext`]
+    ///
+    /// # Errors
+    /// Return an [`Error`] if data is unable to be downloaded from the GPU.
     pub fn download(&self, context: &GpuContext) -> Result<Vec<T>, Error> {
-        Ok(
-            context.get_stream().clone_dtoh(&self.data)?
-        )
+        Ok(context.get_stream().clone_dtoh(&self.data)?)
     }
 }
 
 impl<T: PrecisionType> Tensor2D<T> {
     #[inline]
+    #[must_use]
     pub fn rows(&self) -> usize {
         self.shape[0]
     }
 
     #[inline]
+    #[must_use]
     pub fn cols(&self) -> usize {
         self.shape[1]
     }
@@ -434,6 +472,9 @@ impl<T: PrecisionType> Tensor2D<T> {
     ///
     /// # Arguments
     /// * `context` - See [`GpuContext`]
+    ///
+    /// # Errors
+    /// Return an [`Error`] if data is unable to be downloaded from the GPU.
     pub fn download(&self, context: &GpuContext) -> Result<Matrix<T>, Error> {
         let mut mat = Matrix::new(self.rows(), self.cols());
         mat.v = context.get_stream().clone_dtoh(&self.data)?;
@@ -446,33 +487,39 @@ impl<T: PrecisionType> Tensor4D<T> {
     ///
     /// Corresponds to batch size, or the number of output filters for weights.
     #[inline]
+    #[must_use]
     pub fn outer_dim(&self) -> usize {
         self.shape[0]
     }
 
     /// Semantic alias for `outer_dim()`.
     #[inline]
+    #[must_use]
     pub fn batches(&self) -> usize {
         self.outer_dim()
     }
 
     /// Semantic alias for `outer_dim()`.
     #[inline]
+    #[must_use]
     pub fn filters(&self) -> usize {
         self.outer_dim()
     }
 
     #[inline]
+    #[must_use]
     pub fn channels(&self) -> usize {
         self.shape[1]
     }
 
     #[inline]
+    #[must_use]
     pub fn height(&self) -> usize {
         self.shape[2]
     }
 
     #[inline]
+    #[must_use]
     pub fn width(&self) -> usize {
         self.shape[3]
     }
@@ -481,6 +528,9 @@ impl<T: PrecisionType> Tensor4D<T> {
     ///
     /// # Arguments
     /// * `context` - See [`GpuContext`]
+    ///
+    /// # Errors
+    /// Return an [`Error`] if data is unable to be downloaded from the GPU.
     pub fn download(&self, context: &GpuContext) -> Result<ImageBatch<T>, Error> {
         let mut img = ImageBatch::new(self.batches(), self.channels(), self.height(), self.width());
         img.v = context.get_stream().clone_dtoh(&self.data)?;
@@ -490,7 +540,7 @@ impl<T: PrecisionType> Tensor4D<T> {
 
 impl<T: PrecisionType, K: TensorContainerType> Tensor<T, K>
 where
-    K::ShapeArray: AsRef<[usize]>
+    K::ShapeArray: AsRef<[usize]>,
 {
     /// Creates a new tensor from CPU data vector.
     ///
@@ -501,14 +551,21 @@ where
     ///
     /// # Panics
     /// Panics if length of `cpu_data` does not match total elements of the tensor of size `shape`.
-    pub fn from_cpu_vector(context: &GpuContext, cpu_data: &[T], shape: &K::ShapeArray) -> Result<Self, Error> {
+    ///
+    /// # Errors
+    /// Return an [`Error`] if data is unable to be uploaded to the GPU.
+    pub fn from_cpu_vector(
+        context: &GpuContext,
+        cpu_data: &[T],
+        shape: &K::ShapeArray,
+    ) -> Result<Self, Error> {
         let size: usize = shape.as_ref().iter().product();
         if size != cpu_data.len() {
             return Err(Error::MismatchedDimensions {
                 reason: "length of CPU data does not match the total elements of the tensor",
                 expected: size,
-                found: cpu_data.len()
-            })
+                found: cpu_data.len(),
+            });
         }
 
         let data_gpu = context.get_stream().clone_htod(cpu_data)?;
@@ -516,26 +573,29 @@ where
 
         Ok(Self {
             id: generate_unique_tensor_id(),
-            shape: shape.clone(),
-            data: data_gpu
+            shape: *shape,
+            data: data_gpu,
         })
     }
 
     #[allow(unused)]
-    pub(crate) fn from_gpu_slice(gpu_slice: CudaSlice<T>, shape: &K::ShapeArray) -> Result<Self, Error> {
+    pub(crate) fn from_gpu_slice(
+        gpu_slice: CudaSlice<T>,
+        shape: &K::ShapeArray,
+    ) -> Result<Self, Error> {
         let size: usize = shape.as_ref().iter().product();
         if size != gpu_slice.len() {
             return Err(Error::MismatchedDimensions {
                 reason: "length of CUDA slice does not match the total elements of the tensor",
                 expected: gpu_slice.len(),
-                found: size
-            })
+                found: size,
+            });
         }
 
         Ok(Self {
             id: generate_unique_tensor_id(),
-            shape: shape.clone(),
-            data: gpu_slice
+            shape: *shape,
+            data: gpu_slice,
         })
     }
 
@@ -545,6 +605,9 @@ where
     /// * `context` - See [`GpuContext`]
     /// * `shape` - The shape of the matrix of this tensor.
     /// * `value` - The value to be broadcasted to the entire tensor.
+    ///
+    /// # Errors
+    /// Return an [`Error`] if data is unable to be broadcasted.
     pub fn fill(context: &GpuContext, shape: &K::ShapeArray, value: T) -> Result<Self, Error> {
         let mut tensor = Self::zeros(context, shape)?;
         tensor.broadcast(context, value)?;
@@ -565,6 +628,9 @@ where
     ///
     /// # Panics
     /// Panics if the length of `shape` is not 2, which represents rows and column respectively.
+    ///
+    /// # Errors
+    /// Return an [`Error`] if memory on the GPU is unable to be allocated.
     pub fn zeros(context: &GpuContext, shape: &K::ShapeArray) -> Result<Self, Error> {
         let size: usize = shape.as_ref().iter().product();
         let data_gpu = context.get_stream().alloc_zeros::<T>(size)?;
@@ -572,8 +638,8 @@ where
 
         Ok(Self {
             id: generate_unique_tensor_id(),
-            shape: shape.clone(),
-            data: data_gpu
+            shape: *shape,
+            data: data_gpu,
         })
     }
 
@@ -589,6 +655,9 @@ where
     ///
     /// # Arguments
     /// * `context` - See [`GpuContext`].
+    ///
+    /// # Errors
+    /// Return an [`Error`] if the CUDA stream is unable to synchronise.
     pub fn free_and_sync(self, context: &GpuContext) -> Result<(), Error> {
         drop(self);
         context.get_stream().synchronize()?;
@@ -600,6 +669,9 @@ where
     /// # Arguments
     /// * `context` - See [`GpuContext`]
     /// * `value` - The value to set.
+    ///
+    /// # Errors
+    /// Return an [`Error`] if data is unable to be broadcasted.
     pub fn broadcast(&mut self, context: &GpuContext, value: T) -> Result<(), Error> {
         context.gpu_broadcast(&self.data, value)
     }
@@ -608,11 +680,14 @@ where
     ///
     /// # Arguments
     /// * `context` - See [`GpuContext`]
-    pub fn clone(&self, context: &GpuContext) -> Self {
-        Self {
+    ///
+    /// # Errors
+    /// Return an [`Error`] if the data is unable to be copied in the GPU.
+    pub fn clone(&self, context: &GpuContext) -> Result<Self, Error> {
+        Ok(Self {
             id: generate_unique_tensor_id(),
-            shape: self.shape.clone(),
-            data: context.get_stream().clone_dtod(self.get_data()).expect("Tensor clone failed.")
-        }
+            shape: self.shape,
+            data: context.get_stream().clone_dtod(self.get_data())?,
+        })
     }
 }

@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::process::exit;
 use std::time::SystemTime;
+use soklyn::context::{LossConfig, MultiLayerTrainContext, TrainContext};
 use soklyn::io::save::SafetensorFile;
 
 const BATCH_SIZE: usize = 200;
@@ -48,12 +49,12 @@ fn run_pipeline() -> Result<(), Error> {
     let mut rand = InitXavierNormalFunc::new::<f32>(108, 0.5);
 
     let mut layers = vec![
-        DenseBlock::default(&context, true, 784, 512, BATCH_SIZE, &mut rand)?,
-        DenseBlock::default(&context, true, 512, 256, BATCH_SIZE, &mut rand)?,
-        DenseBlock::default(&context, true, 256, 256, BATCH_SIZE, &mut rand)?,
-        DenseBlock::default(&context, true, 256, 256, BATCH_SIZE, &mut rand)?,
-        DenseBlock::default(&context, true, 256, 512, BATCH_SIZE, &mut rand)?,
-        DenseBlock::default(&context, true, 512, 784, BATCH_SIZE, &mut rand)?,
+        DenseBlock::new(&context, true, 784, 512, BATCH_SIZE, &mut rand)?,
+        DenseBlock::new(&context, true, 512, 256, BATCH_SIZE, &mut rand)?,
+        DenseBlock::new(&context, true, 256, 256, BATCH_SIZE, &mut rand)?,
+        DenseBlock::new(&context, true, 256, 256, BATCH_SIZE, &mut rand)?,
+        DenseBlock::new(&context, true, 256, 512, BATCH_SIZE, &mut rand)?,
+        DenseBlock::new(&context, true, 512, 784, BATCH_SIZE, &mut rand)?,
     ];
 
     configure_layers(&mut layers);
@@ -112,7 +113,7 @@ fn epoch(
     test(mnist, network, context)?;
     println!("--- Epoch #{epoch} complete ---");
 
-    if epoch % 10 == 0 {
+    if epoch.is_multiple_of(10) {
         let mut writer = SafetensorFile::from_ffn(&context, &network)?;
         writer.pass_metadata(&"epoch", &epoch);
         writer.save(format!("assets/data/mnist{}AEC.safetensors", epoch / 10))?;
@@ -144,10 +145,16 @@ fn train(
         forw_ms += t0.elapsed().map_err(|_| Error::InvalidConfiguration { reason: "Clock fault encountered".to_string() })?.as_secs_f64() * 1000.0;
 
         let t1 = SystemTime::now();
-        network.backward(context, &outs, &input, &input, LossFunc::BinaryCrossEntropy, Activation::Sigmoid, BATCH_SIZE,
-                         &[adam, adam, adam, adam, adam, adam],
-                         &[adam, adam, adam, adam, adam, adam],
-                         lr, CLAMP, step)?;
+        network.backward(context, &outs, &input, &input, &LossConfig {
+            loss_func: LossFunc::BinaryCrossEntropy,
+            activation: Activation::Sigmoid
+        }, &MultiLayerTrainContext {
+            batch_size: BATCH_SIZE, 
+            optimisers: &[adam, adam, adam, adam, adam, adam], 
+            norm_optimisers: &[adam, adam, adam, adam, adam, adam], 
+            learn_rate: lr,
+            grad_clamp: CLAMP
+        }, step)?;
         loss_ms += t1.elapsed().map_err(|_| Error::InvalidConfiguration { reason: "Clock fault encountered".to_string() })?.as_secs_f64() * 1000.0;
 
         assert_no_nan(&outs[5].download(context)?.v, &format!("training batch {batch_idx}"));

@@ -1,13 +1,19 @@
-mod ffn_device;
+#[allow(clippy::similar_names)]
 mod conv_device;
+#[allow(clippy::similar_names)]
+mod ffn_device;
 #[allow(unused)]
+#[allow(clippy::similar_names)]
 mod util_device;
 
 use crate::util::core::Tensor2D;
 use crate::util::log::Error;
 use crate::util::r#type::{Precision, PrecisionType};
 use cudarc::driver::sys::CUctx_flags;
-use cudarc::driver::{CudaContext, CudaFunction, CudaSlice, CudaStream, DeviceRepr, LaunchArgs, LaunchConfig, PushKernelArg};
+use cudarc::driver::{
+    CudaContext, CudaFunction, CudaSlice, CudaStream, DeviceRepr, LaunchArgs, LaunchConfig,
+    PushKernelArg,
+};
 use cudarc::nvrtc::Ptx;
 use std::sync::Arc;
 
@@ -21,8 +27,8 @@ pub struct GpuContext {
     cast_f32_f16_func: CudaFunction,
     cast_f16_f32_func: CudaFunction,
     broadcast_func: (CudaFunction, CudaFunction),
-    gemm_func: (CudaFunction, CudaFunction),          // A * B
-    geam_func: (CudaFunction, CudaFunction),          // A + B
+    gemm_func: (CudaFunction, CudaFunction), // A * B
+    geam_func: (CudaFunction, CudaFunction), // A + B
 
     // FFN kernel series
     forward_pass_func0: (CudaFunction, CudaFunction), // Z = WX + B
@@ -62,7 +68,7 @@ impl GpuContext {
         let load_kernel = |name: &str| {
             nn_math_mod
                 .load_function(name)
-                .unwrap_or_else(|e| panic!("Failed to load CUDA function '{}': {:?}", name, e))
+                .unwrap_or_else(|e| panic!("Failed to load CUDA function '{name}': {e:?}"))
         };
 
         let cast_f32_f16 = load_kernel("cast_f32_f16_t_kernel");
@@ -134,7 +140,10 @@ impl GpuContext {
             conv_fft_row_transform_func: (conv_fft_row_transform_f32, conv_fft_row_transform_f16),
             conv_fft_col_transform_func,
             conv_elem_mul_ifft_row_func,
-            conv_ifft_col_transform_func: (conv_ifft_col_transform_f32, conv_ifft_col_transform_f16),
+            conv_ifft_col_transform_func: (
+                conv_ifft_col_transform_f32,
+                conv_ifft_col_transform_f16,
+            ),
             tile_dim,
             tile_dim_minus_1: tile_dim - 1,
             tile_dim_2,
@@ -146,12 +155,12 @@ impl GpuContext {
     ///
     /// # Arguments
     /// * `tile_dim` - Tile Dimension, the size of each block `(tile_dim, tile_dim)`.
-    /// Recommended values are `16` or `32`.
+    ///   Recommended values are `16` or `32`.
     ///
     /// # Panics
-    ///
     /// Panics if no compatible NVIDIA GPU is found, or if the CUDA driver
     /// is missing/incompatible.
+    #[must_use]
     pub fn new(tile_dim: u32) -> Self {
         let context = CudaContext::new(0).expect("Failed to create CUDA context");
         Self::new_from_context(context, tile_dim)
@@ -162,12 +171,12 @@ impl GpuContext {
     /// # Arguments
     /// * `ordinal` - The NVIDIA device index. If you only have one device, set this to `0`.
     /// * `tile_dim` - Tile Dimension, the size of each block `(tile_dim, tile_dim)`.
-    /// Recommended values are `16` or `32`.
+    ///   Recommended values are `16` or `32`.
     ///
     /// # Panics
-    ///
     /// Panics if no compatible NVIDIA GPU is found, or if the CUDA driver
     /// is missing/incompatible.
+    #[must_use]
     pub fn with_device_index(ordinal: usize, tile_dim: u32) -> Self {
         let context = CudaContext::new(ordinal).expect("Failed to create CUDA context");
         Self::new_from_context(context, tile_dim)
@@ -189,32 +198,51 @@ impl GpuContext {
         self.tile_dim_2
     }
 
+    /// # Errors
+    /// Returns an [`Error`] if data cannot be downloaded from the GPU.
     pub fn download<K: DeviceRepr>(&self, cuda_slice: &CudaSlice<K>) -> Result<Vec<K>, Error> {
         Ok(self.stream.clone_dtoh(cuda_slice)?)
     }
 
-    fn calculate_cfg2d(&self, x: usize, y: usize, mem: u32) -> LaunchConfig {
-        LaunchConfig {
+    /// Calculates the kernel launch config for 2D grids, mostly used by the FFN.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if the parameters cannot be cast to usize.
+    fn calculate_cfg2d(&self, x: usize, y: usize, mem: u32) -> Result<LaunchConfig, Error> {
+        Ok(LaunchConfig {
             grid_dim: (
-                (x as u32 + self.tile_dim_minus_1) / self.tile_dim,
-                (y as u32 + self.tile_dim_minus_1) / self.tile_dim,
+                (u32::try_from(x)? + self.tile_dim_minus_1) / self.tile_dim,
+                (u32::try_from(y)? + self.tile_dim_minus_1) / self.tile_dim,
                 1,
             ),
             block_dim: (self.tile_dim, self.tile_dim, 1),
             shared_mem_bytes: mem,
-        }
+        })
     }
 
-    fn calculate_cfg4d(&self, n: usize, c: usize, h: usize, w: usize, mem: u32) -> LaunchConfig {
-        LaunchConfig {
+    /// Calculates the kernel launch config for 4D tensor processing using all 3 dimensions of the grid.
+    /// The batch (`n`) and channels (`c`) are fused into the z-axis.
+    /// Spatial height (`h`) takes the y-axis while spatial width (`w`) takes the x-axis.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if the parameters cannot be cast to usize.
+    fn calculate_cfg4d(
+        &self,
+        n: usize,
+        c: usize,
+        h: usize,
+        w: usize,
+        mem: u32,
+    ) -> Result<LaunchConfig, Error> {
+        Ok(LaunchConfig {
             grid_dim: (
-                (w as u32 + self.tile_dim_minus_1) / self.tile_dim,
-                (h as u32 + self.tile_dim_minus_1) / self.tile_dim,
-                (n * c) as u32,
+                (u32::try_from(w)? + self.tile_dim_minus_1) / self.tile_dim,
+                (u32::try_from(h)? + self.tile_dim_minus_1) / self.tile_dim,
+                u32::try_from(n * c)?,
             ),
             block_dim: (self.tile_dim, self.tile_dim, 1),
             shared_mem_bytes: mem,
-        }
+        })
     }
 
     fn check_tile_dim<T: PrecisionType>(&self) -> Result<(), Error> {
@@ -229,8 +257,9 @@ impl GpuContext {
         Ok(())
     }
 
+    // Used to switch between master tensors and tensors during training,
+    // specifically the weights, biases, norm weights, and norm biases tensor.
     fn master_tensor<'a, T: PrecisionType>(
-        &self,
         builder: &mut LaunchArgs<'a>,
         tensor: Option<&'a Tensor2D<f32>>,
         fallback: &'a Tensor2D<T>,

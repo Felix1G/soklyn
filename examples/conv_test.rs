@@ -1,3 +1,4 @@
+use soklyn::context::LayerInitConfig;
 use soklyn::core::Tensor4D;
 use soklyn::io::device::GpuContext;
 use soklyn::log::{init_log, Error};
@@ -16,12 +17,17 @@ fn main() {
 type Precision = f32;
 
 fn stress_test_forward(context: &GpuContext, init: &mut InitHeUniformFunc) -> Result<(), Error> {
-    let mut layer = ConvBlock::<Precision>::new(
-        &context, ConvAlgorithm::Spatial, true, 64, &(500, 500), init,
+    let mut layer = ConvBlock::<Precision>::new_with_config(
+        context, ConvAlgorithm::Spatial, true, 64, &(500, 500), init,
         KernelConfig::new((80, 80), 1, PaddingType::ZeroPadding, (1, 1), (1, 1))?,
         KernelConfig::disable(), PoolingType::NoPooling,
-        5, 40, Mish, Normalisation::Disabled,
-        Regularisation::L2Regular { regu_coeff: 0.2 }, 0.1
+        5, 40,
+        &LayerInitConfig {
+            activation: Mish,
+            normalisation: Normalisation::Disabled,
+            regularisation: Regularisation::L2Regular { regu_coeff: 0.2 },
+            mask_coeff: 0.1
+        }
     )?;
 
     let input = Tensor4D::zeros(context, &[64, 5, 500, 500])?;
@@ -42,14 +48,18 @@ fn run_pipeline() -> Result<(), Error> {
     //stress_test_forward(&context, &mut init)?;
     //return Ok(());
 
-    let mut layers = vec![
-        ConvBlock::<Precision>::new(
-            &context, ConvAlgorithm::Spatial, true, 2, &(4, 3), &mut init,
-            KernelConfig::new((2, 3), 2, PaddingType::ReflectivePadding, (3, 2), (2, 2))?,
-            KernelConfig::disable(),//KernelConfig::new((2, 2), 2, PaddingType::ZeroPadding, (2, 1), (1, 2))?,
-            PoolingType::MaxPooling, 2, 3, Mish, Normalisation::BatchNorm, Regularisation::None, 0.0
-        )?
-    ];
+    let mut layers = [ConvBlock::<Precision>::new_with_config(
+        &context, ConvAlgorithm::FrequencyFFT, true, 2, &(4, 3), &mut init,
+        KernelConfig::new((2, 3), 2, PaddingType::ReflectivePadding, (1, 2), (2, 1))?,
+        KernelConfig::disable(),//KernelConfig::new((2, 2), 2, PaddingType::ZeroPadding, (2, 1), (1, 2))?,
+        PoolingType::MaxPooling, 2, 3,
+        &LayerInitConfig {
+            activation: Mish,
+            normalisation: Normalisation::BatchNorm,
+            regularisation: Regularisation::None,
+            mask_coeff: 0.0
+        }
+    )?];
 
     let input = Tensor4D::<Precision>::from_cpu_vector(
         &context,
@@ -77,7 +87,7 @@ fn run_pipeline() -> Result<(), Error> {
 
     //layers[0].compute_loss(&context, &Tensor4D::zeros(&context, &[0, 0, 0, 0])?, CrossEntropyLoss, Softmax)?;
 
-    let out_img = layers[0].get_prenorm_features().download(&context)?;
+    let out_img = layers[0].get_preact_features().download(&context)?;
     let filter_img = layers[0].get_filter_weights().download(&context)?;
     //let fft_in = context.download(&layers[0].get_fft_input().unwrap())?;
 

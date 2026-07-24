@@ -1,10 +1,10 @@
+use crate::getter;
 use crate::util::log::Error;
 use crate::util::r#type::Precision;
+use indexmap::{indexmap, IndexMap};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
-use indexmap::{indexmap, IndexMap};
-use crate::getter;
 
 pub(crate) struct SafetensorDescriptor {
     pub(crate) name: String,
@@ -22,7 +22,7 @@ pub(crate) struct JSONTensorDescriptor {
 
 pub(crate) struct SafetensorWriter {
     descriptors: Vec<SafetensorDescriptor>,
-    metadata: IndexMap<String, String>
+    metadata: IndexMap<String, String>,
 }
 
 impl SafetensorWriter {
@@ -52,12 +52,28 @@ impl SafetensorWriter {
 
     getter!(pub get_descriptors, descriptors, Vec<SafetensorDescriptor>);
     getter!(pub get_metadata, metadata, IndexMap<String, String>);
-    
+
+    /// Reads and parses a Safetensors file from a reader, extracting tensor descriptors
+    /// and metadata.
+    ///
+    /// This function parses the 8-byte little-endian header length, deserializes the JSON
+    /// header, extracts optional `__metadata__` attributes, and reads the raw binary tensor
+    /// payload into memory.
+    ///
+    /// # Arguments
+    /// * `file` - A mutable reference to a reader that implements both [`Read`] and [`Seek`].
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if:
+    /// * An I/O error occurs while reading or seeking within `file` (e.g., unexpected EOF).
+    /// * The 8-byte header size integer exceeds the address space of the target architecture ([`usize`]).
+    /// * The JSON header is malformed or cannot be parsed into valid tensor descriptors.
+    /// * A tensor specifies an unsupported data type (only `"F32"` and `"F16"` are supported).
     pub fn read<R: Read + Seek>(file: &mut R) -> Result<Self, Error> {
         // Read 8-byte little-endian header size prefix
         let mut header_size_bytes = [0u8; 8];
         file.read_exact(&mut header_size_bytes)?;
-        let header_size = u64::from_le_bytes(header_size_bytes) as usize;
+        let header_size = usize::try_from(u64::from_le_bytes(header_size_bytes))?;
 
         // Read and parse the JSON header
         let mut header_bytes = vec![0u8; header_size];
@@ -66,7 +82,7 @@ impl SafetensorWriter {
 
         // Tensor binary data begins immediately after the 8-byte prefix + header
         let payload_base = 8 + header_size;
-        let tensor_count = header_map.len() - header_map.contains_key("__metadata__") as usize;
+        let tensor_count = header_map.len() - usize::from(header_map.contains_key("__metadata__"));
         let mut tensors = Vec::with_capacity(tensor_count);
         let mut metadata = IndexMap::<String, String>::new();
 
@@ -89,7 +105,7 @@ impl SafetensorWriter {
                     other => {
                         return Err(Error::UnrecognizedTensorKey {
                             key,
-                            dtype: format!("{:?}", other),
+                            dtype: format!("{other:?}"),
                         });
                     }
                 }
@@ -116,10 +132,24 @@ impl SafetensorWriter {
 
         Ok(Self {
             descriptors: tensors,
-            metadata
+            metadata,
         })
     }
 
+    /// Serializes and writes tensor descriptors and raw binary payload data out to a writer
+    /// following the Safetensors specification format.
+    ///
+    /// The file is structured with an 8-byte little-endian header length prefix, followed by
+    /// an 8-byte aligned JSON header (including optional `__metadata__`), followed immediately
+    /// by contiguous raw tensor byte buffers.
+    ///
+    /// # Arguments
+    /// * `file` - A mutable reference to a writer that implements [`Write`].
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if:
+    /// * Serializing metadata or tensor descriptors to JSON fails.
+    /// * An I/O error occurs while writing bytes to or flushing `file`.
     pub fn write<W: Write>(&self, file: &mut W) -> Result<(), Error> {
         #[cfg(target_endian = "big")]
         compile_error!("Safetensors requires little-endian byte formatting.");
@@ -127,7 +157,10 @@ impl SafetensorWriter {
         let mut header_map = serde_json::Map::new();
 
         if !self.metadata.is_empty() {
-            header_map.insert("__metadata__".to_string(), serde_json::to_value(&self.metadata)?);
+            header_map.insert(
+                "__metadata__".to_string(),
+                serde_json::to_value(&self.metadata)?,
+            );
         }
 
         // Convert all safetensor descriptors into JSON descriptors

@@ -7,7 +7,7 @@ pub struct CosineDecayLR {
     cur_lr: f32,
     cur_step: usize,
     total_step: usize,
-    warmup_steps: usize
+    warmup_steps: usize,
 }
 
 impl CosineDecayLR {
@@ -18,7 +18,8 @@ impl CosineDecayLR {
     /// * `max_lr` - Maximum peak learning rate.
     /// * `total_step` - Total target steps
     /// * `warmup_steps` - Steps of increasing learning rate to warm up the network
-    /// rate is called.
+    ///   rate is called.
+    #[must_use]
     pub fn new(min_lr: f32, max_lr: f32, total_step: usize, warmup_steps: usize) -> Self {
         let mut scheduler = Self {
             min_lr,
@@ -26,13 +27,14 @@ impl CosineDecayLR {
             cur_lr: min_lr,
             cur_step: 0,
             total_step,
-            warmup_steps
+            warmup_steps,
         };
 
         scheduler.update_lr();
         scheduler
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn update_lr(&mut self) {
         if self.cur_step < self.warmup_steps {
             let progress = self.cur_step as f32 / self.warmup_steps as f32;
@@ -47,7 +49,8 @@ impl CosineDecayLR {
             }
 
             let progress = decay_step as f32 / decay_total as f32;
-            self.cur_lr = self.min_lr + 0.5 * (self.max_lr - self.min_lr) * (1.0 + (progress * PI).cos());
+            self.cur_lr =
+                self.min_lr + 0.5 * (self.max_lr - self.min_lr) * (1.0 + (progress * PI).cos());
         }
     }
 
@@ -58,6 +61,7 @@ impl CosineDecayLR {
     }
 
     /// Returns the current learning rate value.
+    #[must_use]
     pub fn get_learning_rate(&self) -> f32 {
         self.cur_lr
     }
@@ -87,12 +91,13 @@ impl ExponentialLR {
     /// # Arguments
     /// * `lr_initial` - The initial learning rate.
     /// * `lr_factor` - A factor multiplied with the current learning factor when a change in learning
-    /// rate is called.
+    ///   rate is called.
+    #[must_use]
     pub fn new(lr_initial: f32, lr_factor: f32) -> Self {
         Self {
             ori_lr: lr_initial,
             cur_lr: lr_initial,
-            lr_factor
+            lr_factor,
         }
     }
 
@@ -101,8 +106,8 @@ impl ExponentialLR {
         self.cur_lr = self.ori_lr;
     }
 
-
     /// Returns the current learning rate value.
+    #[must_use]
     pub fn get_learning_rate(&self) -> f32 {
         self.cur_lr
     }
@@ -127,7 +132,7 @@ pub struct ReduceLROnPlateauScheduler {
     cur_lr: f32,
     lr_factor: f32,
     timer: usize,
-    patience: usize
+    patience: usize,
 }
 
 /// Used for determining the improvement direction for a given test value in the schedulers.
@@ -136,7 +141,7 @@ pub enum SchedulerMode {
     /// Mainly used for loss values.
     Minimize,
     /// Mainly used for accuracy values.
-    Maximize
+    Maximize,
 }
 
 impl ReduceLROnPlateauScheduler {
@@ -144,26 +149,31 @@ impl ReduceLROnPlateauScheduler {
     ///
     /// # Arguments
     /// * `patience` - The maximum amount of non-improvement steps from the network before
-    /// changing the learning rate.
+    ///   changing the learning rate.
     /// * `mode` - The scheduler mode. See [`SchedulerMode`].
     /// * `lr_factor` - A factor multiplied with the current learning factor when a change in learning
-    /// rate is called.
+    ///   rate is called.
     /// * `min_lr` - The minimum learning rate value. When the scheduler reaches this value,
-    /// the learning rate will stay here for the rest of the steps.
+    ///   the learning rate will stay here for the rest of the steps.
     ///
     /// # Panics
     /// Panics if `patience` is set to `0` since a `patience` of `0` means the learning rate never changes.
+    #[must_use]
     pub fn new(patience: usize, mode: SchedulerMode, lr_factor: f32, min_lr: f32) -> Self {
         assert_ne!(patience, 0, "Patience must be non-zero.");
-        
+
         Self {
-            best_val: if mode == SchedulerMode::Maximize { f32::MIN } else { f32::MAX },
+            best_val: if mode == SchedulerMode::Maximize {
+                f32::MIN
+            } else {
+                f32::MAX
+            },
             mode,
             min_lr,
             cur_lr: 0.0,
             lr_factor,
             timer: 0,
-            patience
+            patience,
         }
     }
 
@@ -174,10 +184,15 @@ impl ReduceLROnPlateauScheduler {
     pub fn reset(&mut self, learning_rate: f32) {
         self.cur_lr = learning_rate;
         self.timer = 0;
-        self.best_val = if self.mode == SchedulerMode::Maximize { f32::MIN } else { f32::MAX };
+        self.best_val = if self.mode == SchedulerMode::Maximize {
+            f32::MIN
+        } else {
+            f32::MAX
+        };
     }
 
     /// Returns the current learning rate value.
+    #[must_use]
     pub fn get_learning_rate(&self) -> f32 {
         self.cur_lr
     }
