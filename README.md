@@ -56,6 +56,10 @@ Soklyn is not trying to replace existing frameworks. It exists because building 
 You can say that this is a HUGE improvement to my previous project [fksainetwork](https://github.com/Felix1G/fksainetwork) :)
 
 <a id="features"></a>
+
+## Contributing
+PRs and issues are welcome! Feel free to check the [issues page](https://github.com/Felix1G/soklyn/issues).
+
 ## Features
 
 *This framework currently only supports feed forward networks. Convolutional neural networks and more are coming soon!*
