@@ -3,11 +3,41 @@
 # ⚡ Soklyn (速練)
 
 **A high-performance neural network library written in Rust, utilising CUDA for GPU-accelerated layer execution.**
+<p align="center">
+  <!-- Core Specs & Links -->
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/language-Rust-orange.svg" alt="Language"></a>
+  <a href="https://developer.nvidia.com/cuda-toolkit"><img src="https://img.shields.io/badge/backend-CUDA-green.svg" alt="Backend"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
+  <a href="https://crates.io/crates/soklyn"><img src="https://img.shields.io/crates/v/soklyn.svg?style=for-the-badge&color=fc8d62&logo=rust" height="20" alt="crates.io"></a>
+</p>
 
-[![Language](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
-[![Backend](https://img.shields.io/badge/backend-CUDA-green.svg)](https://developer.nvidia.com/cuda-toolkit)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[<img alt="crates.io" src="https://img.shields.io/crates/v/soklyn.svg?style=for-the-badge&color=fc8d62&logo=rust" height="20">](https://crates.io/crates/soklyn)
+<p align="center">
+  <!-- Stats & Activity -->
+  <a href="https://crates.io/crates/soklyn"><img src="https://img.shields.io/crates/d/soklyn?style=flat-square&logo=rust&color=orange" alt="Crates.io Downloads"></a>
+  <a href="https://github.com/Felix1G/soklyn"><img src="https://img.shields.io/github/stars/Felix1G/soklyn?style=flat-square&logo=github" alt="GitHub Stars"></a>
+  <img src="https://img.shields.io/badge/Maintained%3F-yes-brightgreen?style=flat-square" alt="Maintenance">
+  <img src="https://img.shields.io/github/last-commit/Felix1G/soklyn?style=flat-square&color=blue" alt="GitHub last commit">
+  <img src="https://img.shields.io/github/languages/code-size/Felix1G/soklyn?style=flat-square" alt="Code Size">
+</p>
+
+<p align="center">
+  <!-- Tech Details -->
+  <img src="https://img.shields.io/badge/edition-2021-orange?style=flat-square&logo=rust" alt="Rust Edition">
+  <img src="https://img.shields.io/badge/Compute-sm__120-76B900?style=flat-square&logo=nvidia" alt="NVIDIA Compute">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/tested%20on-Windows%2011-0078D4?style=flat-square&logo=windows" alt="Tested On">
+</p>
+
+<p align="center">
+  <!-- Miscellaneous -->
+  <img src="https://img.shields.io/badge/Built%20In-2026-purple?style=flat-square" alt="Year">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Felix1G/soklyn/discussions"><img src="https://img.shields.io/badge/GitHub-Discussions-181717?style=flat-square&logo=github" alt="Discussions"></a>
+  <a href="mailto:felixks110@gmail.com"><img src="https://img.shields.io/badge/Email-Contact-EA4335?style=flat-square&logo=gmail&logoColor=white" alt="Email"></a>
+   <a href="https://discord.com/users/mynameisntfelix"><img src="https://img.shields.io/badge/Discord-Direct%20Message-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>        
+</p>
 
 [Features](#features) • [Quick Start](#quick-start) • [Architecture](#architecture) • [Usage](#usage)
 
@@ -25,7 +55,9 @@ Soklyn is not trying to replace existing frameworks. It exists because building 
 
 You can say that this is a HUGE improvement to my previous project [fksainetwork](https://github.com/Felix1G/fksainetwork) :)
 
+<a id="features"></a>
 ## Features
+
 *This framework currently only supports feed forward networks. Convolutional neural networks and more are coming soon!*
 
 * **Custom CUDA kernels** — forward pass, backward pass, and normalisation all implemented from scratch in CUDA C++
@@ -39,6 +71,7 @@ You can say that this is a HUGE improvement to my previous project [fksainetwork
 * **Multiple learning rate schedulers** — Cosine Decay, Exponential, Reduce LR on Plateau
 
 ## Quick Start
+
 Add the following placeholders directly to your local workspace development configurations:
 
 ```toml
@@ -47,6 +80,7 @@ soklyn = "0.1.0"
 ```
 
 ## Architecture
+
 Soklyn organizes neural execution state through a streamlined linear spine pattern. 
 Instead of a messy global memory architecture, the operations are cleanly divided into different `DenseBlock` layers, 
 which can be optionally passed into a `FeedForwardNetwork` wrapper.
@@ -81,6 +115,7 @@ The diagram below demonstrates a visualisation of a supposing 3-layer network:
 ```
 
 ## Usage
+
 ```rust
 // 1. Create the GPU context
 let context = GpuContext::new(16); // CUDA tile dimension of 16
