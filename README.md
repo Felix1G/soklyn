@@ -19,6 +19,7 @@
   <img src="https://img.shields.io/badge/Maintained%3F-yes-brightgreen?style=flat-square" alt="Maintenance">
   <img src="https://img.shields.io/github/last-commit/Felix1G/soklyn?style=flat-square&color=blue" alt="GitHub last commit">
   <img src="https://img.shields.io/github/languages/code-size/Felix1G/soklyn?style=flat-square" alt="Code Size">
+  <img src="https://img.shields.io/badge/clippy-linted-brightgreen?style=flat&logo=rust" alt="Clippy Linted" />
 </p>
 
 <p align="center">
