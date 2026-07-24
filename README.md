@@ -1,3 +1,4 @@
+⚠️ **Status: Active Development**. FFN execution is stable/functional (You can import it from the crate itself). CNN layers and FFT optimizations are currently **Work In Progress (WIP)**.
 <div align="center">
 
 # ⚡ Soklyn (速練)
